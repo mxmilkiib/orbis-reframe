@@ -614,7 +614,30 @@ bool VulkanFisheyeStitcher::renderViewVk(const VulkanLensInput& f0, const Vulkan
     v.w = outW;
     v.h = outH;
     return renderViewsImpl(f0, f1, params, measureW, measureH, 0, 0, {v}, stab, colorGrade, fmt,
-                           nullptr, out, r0, r1, err);
+                           nullptr, out, nullptr, r0, r1, err);
+}
+
+bool VulkanFisheyeStitcher::renderViewVkToImage(const VulkanLensInput& f0,
+                                                const VulkanLensInput& f1,
+                                                const insv::StitchGpuParams& params,
+                                                int measureW, int measureH, int outW, int outH,
+                                                const float pose[4], const float stab[9],
+                                                const float colorGrade[4], FlatImageTarget& dst,
+                                                VulkanLensOutcome* r0, VulkanLensOutcome* r1,
+                                                std::string& err)
+{
+    if (dst.nbImages < 1 || dst.nbImages > 2) {
+        err = "FlatImageTarget needs 1 or 2 images";
+        return false;
+    }
+    ViewRect v;
+    if (pose)
+        std::copy(pose, pose + 4, v.pose);
+    v.w = outW;
+    v.h = outH;
+    std::vector<uint8_t> unused;
+    return renderViewsImpl(f0, f1, params, measureW, measureH, 0, 0, {v}, stab, colorGrade,
+                           ViewFormat::Nv12, nullptr, unused, &dst, r0, r1, err);
 }
 
 bool VulkanFisheyeStitcher::renderViewsVk(const VulkanLensInput& f0, const VulkanLensInput& f1,
@@ -635,7 +658,7 @@ bool VulkanFisheyeStitcher::renderViewsVk(const VulkanLensInput& f0, const Vulka
             return false;
         }
     return renderViewsImpl(f0, f1, params, measureW, measureH, canvasW, canvasH, views, stab,
-                           nullptr, ViewFormat::Rgba, &clearRgba, out, r0, r1, err);
+                           nullptr, ViewFormat::Rgba, &clearRgba, out, nullptr, r0, r1, err);
 }
 
 bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const VulkanLensInput& f1,
@@ -644,8 +667,9 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
                                             const std::vector<ViewRect>& views,
                                             const float stab[9], const float colorGrade[4],
                                             ViewFormat fmt, const uint32_t* clear,
-                                            std::vector<uint8_t>& out, VulkanLensOutcome* r0,
-                                            VulkanLensOutcome* r1, std::string& err)
+                                            std::vector<uint8_t>& out, FlatImageTarget* img,
+                                            VulkanLensOutcome* r0, VulkanLensOutcome* r1,
+                                            std::string& err)
 {
     if (!m_ready || !d->nv12 || !m_viewReady) {
         err = "renderViewVk requires initAdopt() and the fused view pipeline";
@@ -792,33 +816,95 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
     }
     d->tsWrite(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 1);
 
-    VkBufferMemoryBarrier toHost{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-    toHost.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-    toHost.srcQueueFamilyIndex = toHost.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toHost.buffer = d->flatBuf;
-    toHost.size = VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(d->cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
-                         0, nullptr, 1, &toHost, 0, nullptr);
+    // Host read-back (flatBuf -> `out`), or the on-device copy into `img`'s
+    // images -- flatBuf is tightly packed NV12 either way.
+    if (img) {
+        VkBufferMemoryBarrier toCopy{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+        toCopy.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        toCopy.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        toCopy.srcQueueFamilyIndex = toCopy.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toCopy.buffer = d->flatBuf;
+        toCopy.size = VK_WHOLE_SIZE;
+        VkImageMemoryBarrier toDst[2]{};
+        const bool multiplane = img->nbImages == 1;
+        for (int i = 0; i < img->nbImages; ++i) {
+            toDst[i] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            toDst[i].srcAccessMask = static_cast<VkAccessFlags>(img->access[i]);
+            toDst[i].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toDst[i].oldLayout = img->layout[i];
+            toDst[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toDst[i].srcQueueFamilyIndex = toDst[i].dstQueueFamilyIndex =
+                VK_QUEUE_FAMILY_IGNORED;
+            toDst[i].image = img->img[i];
+            toDst[i].subresourceRange = {multiplane ? VkImageAspectFlags(VK_IMAGE_ASPECT_PLANE_0_BIT |
+                                                                         VK_IMAGE_ASPECT_PLANE_1_BIT)
+                                                    : VK_IMAGE_ASPECT_COLOR_BIT,
+                                         0, 1, 0, 1};
+        }
+        vkCmdPipelineBarrier(d->cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &toCopy,
+                             img->nbImages, toDst);
+
+        // NV12 planes: Y at offset 0 (outW x outH), interleaved UV at
+        // outW*outH (outW/2 x outH/2 in texel pairs).
+        VkBufferImageCopy y{0, 0, 0,
+                            {multiplane ? VkImageAspectFlags(VK_IMAGE_ASPECT_PLANE_0_BIT)
+                                        : VK_IMAGE_ASPECT_COLOR_BIT,
+                             0, 0, 1},
+                            {0, 0, 0},
+                            {static_cast<uint32_t>(outW), static_cast<uint32_t>(outH), 1}};
+        VkBufferImageCopy uv = y;
+        uv.bufferOffset = static_cast<VkDeviceSize>(outW) * outH;
+        uv.imageSubresource.aspectMask =
+            multiplane ? VkImageAspectFlags(VK_IMAGE_ASPECT_PLANE_1_BIT)
+                       : VK_IMAGE_ASPECT_COLOR_BIT;
+        uv.imageExtent = {static_cast<uint32_t>(outW / 2), static_cast<uint32_t>(outH / 2), 1};
+        vkCmdCopyBufferToImage(d->cmd, d->flatBuf, img->img[0],
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &y);
+        vkCmdCopyBufferToImage(d->cmd, d->flatBuf, img->img[multiplane ? 0 : 1],
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &uv);
+        for (int i = 0; i < img->nbImages; ++i) {
+            img->layout[i] = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            img->access[i] = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        }
+    } else {
+        VkBufferMemoryBarrier toHost{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+        toHost.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        toHost.srcQueueFamilyIndex = toHost.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toHost.buffer = d->flatBuf;
+        toHost.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(d->cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &toHost, 0, nullptr);
+    }
 
     vkEndCommandBuffer(d->cmd);
 
-    const VkSemaphore waitSems[2] = {f0.semaphore, f1.semaphore};
-    const uint64_t waitVals[2] = {f0.semWaitValue, f1.semWaitValue};
-    const uint64_t signalVals[2] = {f0.semWaitValue + 1, f1.semWaitValue + 1};
-    const VkPipelineStageFlags waitStages[2] = {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
+    // The lens pair's semaphores, plus the target image's own timeline
+    // semaphore (its current value could still gate a previous reader).
+    VkSemaphore waitSems[4] = {f0.semaphore, f1.semaphore};
+    uint64_t waitVals[4] = {f0.semWaitValue, f1.semWaitValue};
+    uint64_t signalVals[4] = {f0.semWaitValue + 1, f1.semWaitValue + 1};
+    VkPipelineStageFlags waitStages[4] = {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
+    int nbDst = img ? img->nbImages : 0;
+    for (int i = 0; i < nbDst; ++i) {
+        waitSems[2 + i] = img->sem[i];
+        waitVals[2 + i] = img->semValue[i];
+        signalVals[2 + i] = img->semValue[i] + 1;
+        waitStages[2 + i] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    }
     VkTimelineSemaphoreSubmitInfo ts{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-    ts.waitSemaphoreValueCount = 2;
+    ts.waitSemaphoreValueCount = 2 + nbDst;
     ts.pWaitSemaphoreValues = waitVals;
-    ts.signalSemaphoreValueCount = 2;
+    ts.signalSemaphoreValueCount = 2 + nbDst;
     ts.pSignalSemaphoreValues = signalVals;
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.pNext = &ts;
-    si.waitSemaphoreCount = 2;
+    si.waitSemaphoreCount = 2 + nbDst;
     si.pWaitSemaphores = waitSems;
     si.pWaitDstStageMask = waitStages;
-    si.signalSemaphoreCount = 2;
+    si.signalSemaphoreCount = 2 + nbDst;
     si.pSignalSemaphores = waitSems;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &d->cmd;
@@ -830,14 +916,18 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
 
     if (r0) { r0->semSignalValue = signalVals[0]; r0->newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; }
     if (r1) { r1->semSignalValue = signalVals[1]; r1->newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; }
+    for (int i = 0; i < nbDst; ++i)
+        img->semValue[i] = signalVals[2 + i];
 
     vkWaitForFences(d->device, 1, &d->fence, VK_TRUE, 5'000'000'000ULL);
     vkResetFences(d->device, 1, &d->fence);
     const auto tDone = std::chrono::steady_clock::now();
     d->tsRead(false);
 
-    out.resize(static_cast<size_t>(outBytes));
-    std::memcpy(out.data(), d->flatMap, static_cast<size_t>(outBytes));
+    if (!img) {
+        out.resize(static_cast<size_t>(outBytes));
+        std::memcpy(out.data(), d->flatMap, static_cast<size_t>(outBytes));
+    }
     d->timing.fenceWaitMs = msBetween(tSubmit, tDone);
     d->timing.copyMs = msBetween(tDone, std::chrono::steady_clock::now());
     return true;
