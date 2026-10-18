@@ -39,10 +39,15 @@ what our code assumes. Written as differences from the X5
   2026.05.20 white-paper curve to linear reflectance on BT.2020, then
   gamut-maps to BT.709 and re-encodes with the BT.709 OETF, so the seam
   measure, blending and grading see ordinary display-encoded RGB.
-- The app's GPU stitch samples the decoder's pictures as 8-bit NV12
-  (`VK_FORMAT_G8_B8R8_2PLANE_420_UNORM`) through a BT.709 full-range
-  conversion. A 10-bit stream needs a second sampler format and shader
-  variant; Dolby Vision presumably BT.2020 with a PQ or HLG transfer
+- ✅ The GPU stitch samples the decoder's pictures through a ycbcr
+  conversion built for the frame's real `VkFormat` - the Main 10
+  `G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16` decodes at full precision
+  (RADV only honors the conversion on the immutable sampler, so the
+  format is probed before `bringUp`). Exports of a 10-bit source request
+  HEVC Main 10: the fused view packs P010 straight into the encoder's
+  Vulkan frame pool (`hevc_vulkan`), with NV12 staging widened to
+  P010LE on CPU paths (`hevc_vaapi`) and an 8-bit retry when Main 10
+  can't open. Dolby Vision presumably BT.2020 with a PQ or HLG transfer
   (❓ unconfirmed) and a tone map.
 - The X5 has I-Log too (X5 §3.3), so the same work covers it.
 
