@@ -5,6 +5,12 @@
 
 #include <NativeStitchSource.h> // stitch::NativeStitchSource, stitch::Frame, stitch::PreviewStitchConfig
 #include <ProbeClip.h>          // stitch::ProbeClip
+#include <VulkanVideoDecoder.h> // insv::sharedVulkanDevice
+
+extern "C" {
+#include <libavutil/buffer.h> // av_buffer_unref
+#include <libavutil/frame.h>  // av_frame_alloc / av_frame_ref / av_frame_free
+}
 
 #include <algorithm>
 #include <cmath>
@@ -167,6 +173,11 @@ void ReframeExportController::run(const Request &req)
         cfg.audio_sample_rate = kAudioRate;
         cfg.audio_channels = kAudioChannels;
     }
+    // Let a *_vulkan encoder share the decode/stitch device, so export can
+    // stay GPU-resident (FlattenWriter::vulkanEncodeAvailable / the
+    // ReadFlatFrameVk path below). Unset when the machine has no Vulkan.
+    AVBufferRef* sharedVkDev = insv::sharedVulkanDevice();
+    cfg.vulkan_device = sharedVkDev;
 
     std::string err;
     const double outFrameMs = 1000.0 / req.fps;
@@ -175,9 +186,11 @@ void ReframeExportController::run(const Request &req)
     // its half-written output file *before* deleting that file below.
     auto writer = std::make_unique<exportpipe::FlattenWriter>();
     if (!writer->open(cfg, err)) {
+        av_buffer_unref(&sharedVkDev);
         emit finished(false, QString::fromStdString(err), req.outPath);
         return;
     }
+    av_buffer_unref(&sharedVkDev); // the encoder holds its own reference now
     // Overlays: output frame k is timeline time k / fps (the audio mix's
     // clock too).
     auto insets = std::make_shared<exportpipe::InsetCompositor>(req.insets, req.outWidth,
@@ -277,6 +290,11 @@ void ReframeExportController::run(const Request &req)
         // Needs outW % 4 == 0 and outH % 2 == 0.
         const bool gpuFlat = src->GpuReframeAvailable() && (req.outWidth % 4) == 0 &&
                              (req.outHeight % 2) == 0;
+        // And no host round-trip at all when the encoder shares the stitch
+        // device: the fused view's NV12 goes straight into an encoder frame
+        // on-device. Off when a frame hook needs CPU pixels (insets).
+        const bool gpuVk = gpuFlat && writer->vulkanEncodeAvailable() &&
+                           src->GpuViewAvailable();
 
         // Pose + stab for a decoded frame, at that frame's source time.
         auto poseAt = [&c](int64_t ptsMs, float pose[4], float stab[9]) {
@@ -304,7 +322,44 @@ void ReframeExportController::run(const Request &req)
                 break;
             }
 
-            if (gpuFlat) {
+            if (gpuVk) {
+                AVFrame* vkFrame = writer->acquireVulkanFrame();
+                int64_t ptsMs = 0;
+                if (!vkFrame ||
+                    !src->ReadFlatFrameVk(req.outWidth, req.outHeight, poseAt, c.colorGrade,
+                                          vkFrame, ptsMs)) {
+                    av_frame_free(&vkFrame);
+                    const std::string &e = src->GetLastError();
+                    if (!e.empty()) {
+                        emit finished(false, QString::fromStdString(e), req.outPath);
+                        return;
+                    }
+                    break; // clean end-of-clip
+                }
+                if (ptsMs + srcHalfMs < c.trimInMs) {
+                    av_frame_free(&vkFrame);
+                    continue; // straggler ahead of the in-point
+                }
+                const int64_t reps = repeatsFor(ptsMs);
+                for (int64_t r = 0; r < reps; ++r) {
+                    // A repeated frame (slow output / speed < 1) shares the
+                    // image: every send refs the same AVVkFrame.
+                    AVFrame* f = av_frame_alloc();
+                    if (!f || av_frame_ref(f, vkFrame) < 0) {
+                        av_frame_free(&f);
+                        av_frame_free(&vkFrame);
+                        emit finished(false, tr("Out of memory."), req.outPath);
+                        return;
+                    }
+                    ++outFrames;
+                    if (!writer->addVulkanFrame(f, err) || !feedAudio()) {
+                        emit finished(false, QString::fromStdString(err), req.outPath);
+                        return;
+                    }
+                }
+                av_frame_free(&vkFrame); // addVulkanFrame consumed the sends
+                written += reps;
+            } else if (gpuFlat) {
                 stitch::FlatFrame ff = src->ReadFlatFrame(req.outWidth, req.outHeight, poseAt, c.colorGrade);
                 if (ff.nv12.empty()) { // clean end-of-clip, or error
                     const std::string &e = src->GetLastError();
