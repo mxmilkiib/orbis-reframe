@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 
+struct AVBufferRef;
 struct AVFrame;
 
 namespace insv {
@@ -126,6 +127,22 @@ public:
     Frame ReadViewFrame(int outW, int outH, const FramePoseFn& perFrame,
                         const float colorGrade[4] = nullptr);
 
+    // The Vulkan hardware device the decode -> stitch path runs on (a new
+    // reference to insv::sharedVulkanDevice()), or nullptr when this source
+    // is on the CPU-decode path. Pass it to the encoder's FlattenConfig so a
+    // *_vulkan encoder shares the device and frames can stay resident.
+    AVBufferRef* vulkanHwDevice() const;
+
+    // The ReadFlatFrame fused pass without the host round-trip: the NV12
+    // view is copied on-device into `dst`, an AV_PIX_FMT_VULKAN frame
+    // allocated from the encoder's hw frames context on vulkanHwDevice().
+    // The frame's AVVkFrame semaphore/layout bookkeeping is advanced to the
+    // submission. Same pose / stab / grade handling as ReadFlatFrame; false
+    // at end-of-clip (GetLastError() empty) or on error. Requires
+    // GpuViewAvailable() -- the via-equirect path has no image variant.
+    bool ReadFlatFrameVk(int outW, int outH, const FramePoseFn& perFrame,
+                         const float colorGrade[4], AVFrame* dst, int64_t& pts_ms);
+
     // Several views of one frame, rendered when the caller is ready (the
     // privacy blur's plate scan: the detector's tiles first, the quad
     // tracker's views once it knows where to look). HoldNextPair decodes the
@@ -217,8 +234,11 @@ private:
     // render the view into `out` (NV12 via the equirect, NV12 fused, or RGBA
     // fused). False with last_error_ set on error; false with it empty at EOS.
     enum class FlatPath { ViaEquirect, FusedNv12, FusedRgba };
+    // `vkDst` (an AV_PIX_FMT_VULKAN AVFrame on the shared device) is only
+    // valid for FusedNv12 and replaces `out`: the NV12 lands in its images.
     bool readView(int outW, int outH, const FramePoseFn& perFrame, const float colorGrade[4],
-                  FlatPath path, std::vector<uint8_t>& out, int64_t& pts_ms);
+                  FlatPath path, std::vector<uint8_t>& out,
+                  AVFrame* vkDst, int64_t& pts_ms);
 
     // Stage 2: GPU-resident decode -> GPU stitch, nothing on the CPU. Used when
     // both halves init; else vdec_ is null and the stage-1 path runs.

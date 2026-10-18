@@ -10,6 +10,10 @@
 #include <VulkanFisheyeStitcher.h> // render::VulkanFisheyeStitcher
 #include <VulkanVideoDecoder.h>    // insv::VulkanVideoDecoder (stage 2, GPU decode)
 
+extern "C" {
+#include <libavutil/hwcontext_vulkan.h> // AVVkFrame (ReadFlatFrameVk)
+}
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -447,7 +451,7 @@ FlatFrame NativeStitchSource::ReadFlatFrame(int outW, int outH, const FramePoseF
     FlatFrame frame;
     if (!readView(outW, outH, perFrame, colorGrade,
                   fused ? FlatPath::FusedNv12 : FlatPath::ViaEquirect, frame.nv12,
-                  frame.timestamp_ms))
+                  nullptr, frame.timestamp_ms))
         return FlatFrame{};
     frame.width = outW;
     frame.height = outH;
@@ -462,16 +466,39 @@ Frame NativeStitchSource::ReadViewFrame(int outW, int outH, const FramePoseFn& p
     }
     Frame frame;
     if (!readView(outW, outH, perFrame, colorGrade, FlatPath::FusedRgba, frame.rgba,
-                  frame.timestamp_ms))
+                  nullptr, frame.timestamp_ms))
         return Frame{};
     frame.width = outW;
     frame.height = outH;
     return frame;
 }
 
+AVBufferRef* NativeStitchSource::vulkanHwDevice() const {
+    // Only the GPU path runs on Vulkan at all; the device is the decoder's
+    // shared one.
+    return vdec_ ? insv::sharedVulkanDevice() : nullptr;
+}
+
+bool NativeStitchSource::ReadFlatFrameVk(int outW, int outH, const FramePoseFn& perFrame,
+                                         const float colorGrade[4], AVFrame* dst,
+                                         int64_t& pts_ms) {
+    if (!GpuViewAvailable()) {
+        last_error_ = "ReadFlatFrameVk without the fused GPU view path";
+        return false;
+    }
+    if (!dst || dst->format != AV_PIX_FMT_VULKAN || !dst->data[0]) {
+        last_error_ = "ReadFlatFrameVk wants an AV_PIX_FMT_VULKAN frame";
+        return false;
+    }
+    std::vector<uint8_t> unused;
+    return readView(outW, outH, perFrame, colorGrade, FlatPath::FusedNv12, unused, dst,
+                    pts_ms);
+}
+
 bool NativeStitchSource::readView(int outW, int outH, const FramePoseFn& perFrame,
                                   const float colorGrade[4], FlatPath path,
-                                  std::vector<uint8_t>& out, int64_t& pts_ms) {
+                                  std::vector<uint8_t>& out, AVFrame* vkDst,
+                                  int64_t& pts_ms) {
     ReleaseHeldPair(); // a held frame goes before the decoder moves on
     AVFrame* f0 = nullptr;
     AVFrame* f1 = nullptr;
@@ -499,15 +526,37 @@ bool NativeStitchSource::readView(int outW, int outH, const FramePoseFn& perFram
     std::string gerr;
     render::VulkanLensInput in0 = toRenderInput(lf0), in1 = toRenderInput(lf1);
     const insv::StitchGpuParams params = paramsWithSeam(pts_ms, in0, in1);
-    const bool ok =
-        path == FlatPath::ViaEquirect
-            ? gpu_->stitchAndReframeVk(in0, in1, params, eq_w_, eq_h_, outW, outH, pose, stab,
-                                       colorGrade, out, &oc0, &oc1, gerr)
-            : gpu_->renderViewVk(in0, in1, params, eq_w_, eq_h_, outW, outH, pose, stab, colorGrade,
-                                 path == FlatPath::FusedRgba
-                                     ? render::VulkanFisheyeStitcher::ViewFormat::Rgba
-                                     : render::VulkanFisheyeStitcher::ViewFormat::Nv12,
-                                 out, &oc0, &oc1, gerr);
+    bool ok;
+    if (vkDst) {
+        // AVVkFrame: multi-plane NV12 is one image, per-plane is two.
+        auto* vkf = reinterpret_cast<AVVkFrame*>(vkDst->data[0]);
+        render::VulkanFisheyeStitcher::FlatImageTarget tgt{};
+        tgt.nbImages = vkf->img[1] ? 2 : 1;
+        for (int i = 0; i < tgt.nbImages; ++i) {
+            tgt.img[i] = vkf->img[i];
+            tgt.layout[i] = vkf->layout[i];
+            tgt.access[i] = vkf->access[i];
+            tgt.sem[i] = vkf->sem[i];
+            tgt.semValue[i] = vkf->sem_value[i];
+        }
+        ok = gpu_->renderViewVkToImage(in0, in1, params, eq_w_, eq_h_, outW, outH, pose,
+                                       stab, colorGrade, tgt, &oc0, &oc1, gerr);
+        for (int i = 0; i < tgt.nbImages; ++i) {
+            vkf->layout[i] = tgt.layout[i];
+            vkf->access[i] = tgt.access[i];
+            vkf->sem_value[i] = tgt.semValue[i];
+        }
+    } else {
+        ok = path == FlatPath::ViaEquirect
+                 ? gpu_->stitchAndReframeVk(in0, in1, params, eq_w_, eq_h_, outW, outH, pose,
+                                            stab, colorGrade, out, &oc0, &oc1, gerr)
+                 : gpu_->renderViewVk(in0, in1, params, eq_w_, eq_h_, outW, outH, pose, stab,
+                                      colorGrade,
+                                      path == FlatPath::FusedRgba
+                                          ? render::VulkanFisheyeStitcher::ViewFormat::Rgba
+                                          : render::VulkanFisheyeStitcher::ViewFormat::Nv12,
+                                      out, &oc0, &oc1, gerr);
+    }
 
     insv::VulkanLensFrameResult r0{oc0.semSignalValue, oc0.newLayout};
     insv::VulkanLensFrameResult r1{oc1.semSignalValue, oc1.newLayout};
