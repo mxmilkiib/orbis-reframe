@@ -107,14 +107,18 @@ VkImageView VulkanFisheyeStitcher::Impl::nv12ViewFor(VkImage img, VkFormat fmt)
     if (it != nv12Views.end())
         return it->second;
     // The decoder's images carry STORAGE (and video) usage, which the
-    // 2-plane format can't back in a view: sample-only views.
+    // 2-plane format can't back in a view: sample-only views. The ycbcr
+    // conversion (made for the frame format) is on the immutable sampler AND
+    // chained here when it matches the image's format -- a mismatched
+    // conversion would make the view invalid.
     VkImageViewUsageCreateInfo usage{VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO};
     usage.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
     VkSamplerYcbcrConversionInfo yci{VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO};
     yci.pNext = &usage;
     yci.conversion = ycbcr;
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    vi.pNext = &yci;
+    vi.pNext = fmt == ycbcrFormat ? static_cast<const void*>(&yci)
+                                 : static_cast<const void*>(&usage);
     vi.image = img;
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vi.format = fmt;
@@ -515,12 +519,13 @@ bool VulkanFisheyeStitcher::init(std::string& err)
     }
     vkGetDeviceQueue(d->device, d->queueFamily, 0, &d->queue);
 
-    return bringUp(false, err);
+    return bringUp(false, VK_FORMAT_UNDEFINED, err);
 }
 
 bool VulkanFisheyeStitcher::initAdopt(VkInstance inst, VkPhysicalDevice phys, VkDevice dev,
                                       uint32_t computeQueueFamily,
-                                      VkDeviceQueueCreateFlags queueFlags, std::string& err)
+                                      VkDeviceQueueCreateFlags queueFlags, VkFormat frameFormat,
+                                      std::string& err)
 {
     d->adopted = true;
     d->instance = inst;
@@ -554,10 +559,10 @@ bool VulkanFisheyeStitcher::initAdopt(VkInstance inst, VkPhysicalDevice phys, Vk
         vkGetPhysicalDeviceProperties2(phys, &p2);
         std::memcpy(d->deviceUuid, idp.deviceUUID, sizeof d->deviceUuid);
     }
-    return bringUp(true, err);
+    return bringUp(true, frameFormat, err);
 }
 
-bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, std::string& err)
+bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, VkFormat frameFormat, std::string& err)
 {
     d->nv12 = nv12Mode;
 
@@ -595,11 +600,18 @@ bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, std::string& err)
         }
     }
 
+    // The ycbcr conversion carries the decoded frames' real format (G10X6...
+    // for the X6's Main-10 streams, G8_B8R8 for 8-bit): the spec needs it to
+    // match the image's, and RADV applies the conversion only when it rides
+    // on the immutable sampler baked into the set layout -- a sampler handed
+    // in per descriptor write is ignored for this.
     VkSamplerYcbcrConversionInfo yci{VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO};
     if (nv12Mode) {
         VkSamplerYcbcrConversionCreateInfo ycci{
             VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO};
-        ycci.format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM; // NV12
+        ycci.format = frameFormat != VK_FORMAT_UNDEFINED
+                          ? frameFormat
+                          : VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
         ycci.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709;
         ycci.ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_FULL; // camera HEVC is full range
         ycci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -612,6 +624,7 @@ bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, std::string& err)
             return false;
         }
         yci.conversion = d->ycbcr;
+        d->ycbcrFormat = ycci.format;
     }
 
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -630,8 +643,8 @@ bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, std::string& err)
         return false;
     }
 
-    // Bindings 1 & 2 use an immutable sampler in nv12 mode (ycbcr conversion
-    // must be baked into the layout).
+    // Bindings 1 & 2 use an immutable sampler in nv12 mode (the ycbcr
+    // conversion must be baked into the layout for RADV to apply it).
     const VkSampler immutable[2] = {d->sampler, d->sampler};
     VkDescriptorSetLayoutBinding b[6]{};
     b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};

@@ -165,6 +165,7 @@ struct VulkanFisheyeStitcher::Impl {
 
     VkSampler sampler = VK_NULL_HANDLE;
     VkSamplerYcbcrConversion ycbcr = VK_NULL_HANDLE; // nv12 mode only
+    VkFormat ycbcrFormat = VK_FORMAT_UNDEFINED;      // the format `ycbcr` was made for
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
     VkDescriptorPool descPool = VK_NULL_HANDLE;
     VkDescriptorSet descSet = VK_NULL_HANDLE;

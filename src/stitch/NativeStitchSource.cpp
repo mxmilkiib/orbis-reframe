@@ -161,7 +161,11 @@ bool NativeStitchSource::Open(const std::string& clip_path, const PreviewStitchC
             vdec->deviceHandles(inst, phys, dev, qf, qflags);
             auto gpu = std::make_unique<render::VulkanFisheyeStitcher>();
             std::string gerr;
-            if (gpu->initAdopt(inst, phys, dev, qf, qflags, gerr)) {
+            // The stitcher bakes the frames' real format (Main-10 clips come
+            // in as G10X6..., 8-bit as G8_B8R8) into its ycbcr conversion;
+            // peek a frame to learn it before the pipelines are built.
+            const VkFormat frameFmt = vdec->frameFormat();
+            if (gpu->initAdopt(inst, phys, dev, qf, qflags, frameFmt, gerr)) {
                 auto ql = vdec->queueLock(qf, 0);
                 gpu->setQueueLock(std::move(ql.lock), std::move(ql.unlock));
                 gpu->setDeviceKeepAlive(vdec->deviceKeepAlive());

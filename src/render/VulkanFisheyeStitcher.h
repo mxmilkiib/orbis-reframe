@@ -73,12 +73,13 @@ public:
     // stitchVk(). `queueFlags` is AVVulkanDeviceContext::queue_flags -- the
     // flags FFmpeg created its queues with (PROTECTED on some FFmpeg/driver
     // pairs; those queues need vkGetDeviceQueue2, vkGetDeviceQueue returns
-    // NULL for them). False (err set) if the device can't do ycbcr conversion
-    // or the NV12 shader is missing -- caller should fall back to
-    // init()+stitch().
+    // NULL for them). `frameFormat` is the VkFormat the decoder's frames will
+    // carry (e.g. VulkanVideoDecoder::frameFormat()); UNDEFINED means NV12.
+    // False (err set) if the device can't do ycbcr conversion or the NV12
+    // shader is missing -- caller should fall back to init()+stitch().
     bool initAdopt(VkInstance inst, VkPhysicalDevice phys, VkDevice dev,
                    uint32_t computeQueueFamily, VkDeviceQueueCreateFlags queueFlags,
-                   std::string& err);
+                   VkFormat frameFormat, std::string& err);
 
     bool ready() const { return m_ready; }
 
@@ -227,7 +228,7 @@ public:
     const StitchTiming& lastTiming() const;
 
 private:
-    bool bringUp(bool nv12Mode, std::string& err);
+    bool bringUp(bool nv12Mode, VkFormat frameFormat, std::string& err);
     bool buildReframePipeline(std::string& err);
     bool buildViewPipeline(std::string& err);
     // renderViewVk / renderViewsVk: `views` into one buffer (canvas 0 x 0 =
