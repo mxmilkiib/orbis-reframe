@@ -1,6 +1,12 @@
 #include "PlateTracking.h"
 
+#include <opencv2/core/version.hpp>
+#if CV_VERSION_MAJOR >= 5
+#include <opencv2/features.hpp> // goodFeaturesToTrack (imgproc before 5)
+#include <opencv2/geometry.hpp> // findHomography, estimateAffinePartial2D (calib3d)
+#else
 #include <opencv2/calib3d.hpp>
+#endif
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video/tracking.hpp>
 

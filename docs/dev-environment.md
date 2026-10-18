@@ -14,7 +14,7 @@ Update this file if the toolchain moves.
 - **Shader compiler**: `glslangValidator` (apt: `glslang-tools`)
 - **Other libs**: `nlohmann-json3-dev`
 - **FFmpeg dev** (demux/decode/encode for the stitch layer, export and tools): `libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev` (libavfilter since 2026-09-27: `atempo` audio time-stretch for clips at speed ≠ 1)
-- **OpenCV** 4.10 (*optional* — the per-clip gyro sync fine-tune, the plate scan, `tools/residual_stab`; subject tracking also needs the contrib `tracking` + `dnn` modules, `libopencv-contrib-dev`): `libopencv-dev`. CMake skips what needs it with a `STATUS` message when absent; the app still builds.
+- **OpenCV** 4.10 (*optional* — the per-clip gyro sync fine-tune, the plate scan, `tools/residual_stab`; subject tracking also needs the contrib `tracking` + `dnn` modules, `libopencv-contrib-dev`): `libopencv-dev`. CMake skips what needs it with a `STATUS` message when absent; the app still builds. OpenCV 5 builds too (Arch's 5.0.0, checked 2026-10-18): it moved `goodFeaturesToTrack` into the `features` module and `findHomography` / `estimateAffinePartial2D` from `calib3d` into `geometry`, and `CMakeLists.txt` links those by version.
 - **ncnn** 20260526 (*optional* — the privacy blur's plate scan, "Scan clip" in the Privacy tab, and `tools/plate_scan`): not in Debian. `scripts/fetch_ncnn.sh` downloads the pinned release `ncnn-20260526-ubuntu-2404-shared.zip` (<https://github.com/Tencent/ncnn/releases>; Vulkan built in, "simplevk", no `libvulkan` link; needs only `libgomp1` besides libc/libstdc++), checks its SHA-256 and unpacks it into `third_party/ncnn/` (gitignored), where CMake finds it on its own; `-DNCNN_ROOT=<folder>` (`NCNN_ROOT=<folder> scripts/build.sh`) points at another copy. `cmake --install` ships `libncnn.so.1` in `lib/orbis-reframe/` (the binary's `INSTALL_RPATH` is `$ORIGIN/../lib/orbis-reframe`). Without it CMake prints a `STATUS` line; the app can't scan then, but still applies scans it has. After switching copies, clear the cached one: `cmake -U ncnn_DIR -U NCNN_ROOT build`.
 - **ONNX Runtime** 1.23 (*optional* — the "Voice only" / "Voice + ambience" noise modes, DeepFilterNet 3): `libonnxruntime-dev`. Only its headers are needed to build; `insv::VoiceIsolator` `dlopen()`s `libonnxruntime.so.1.<ORT_API_VERSION>` (the headers' API version is the 1.x minor version: `.so.1.23` here, `.so.1.21` on Debian 13) on first use; CMake turns the same number into the `.deb`'s `libonnxruntime1.23` and the "install it" hint. CMake hides the voice modes with a `STATUS` message when the headers are absent. Without root, `apt-get download libonnxruntime-dev libonnxruntime1.23` + `dpkg -x` into a folder and configure with `-DONNXRUNTIME_ROOT=<folder>/usr` (how it was developed, 2026-09-30).
 - **Qt6 Multimedia** (*optional* — audio playback): `qt6-multimedia-dev`. CMake skips `AudioPlayer`/`Qt6::Multimedia` with a `STATUS` message when absent; `orbis-reframe` still builds, just silently (no sound).
@@ -109,8 +109,10 @@ dependencies below plus `git dpkg-dev file desktop-file-utils` and runs
 (downloaded `.deb`s are kept in `tmp/package-apt-cache/<target>/`). The same
 source builds on all three: Debian 13 has Qt 6.8, FFmpeg 7.1, ONNX Runtime 1.21
 and the same OpenCV 4.10; Ubuntu 26.04 has Qt 6.10.2, FFmpeg 8.0, ONNX
-Runtime 1.23 and OpenCV 4.10, so it's Testing with an older FFmpeg. Nothing in
-the source is version-guarded (checked 2026-10-10, no warnings). ncnn's
+Runtime 1.23 and OpenCV 4.10, so it's Testing with an older FFmpeg. Two
+version guards: `AVVulkanDeviceContext::queue_flags` is read only from
+libavutil 60.32.100 (FFmpeg 9; older FFmpeg creates its queues without
+flags), and OpenCV 5's module names (above). ncnn's
 Ubuntu 24.04 build (glibc 2.39) runs on all three. Ubuntu 24.04 is too old
 to build (Qt 6.4, FFmpeg 6.1 with the old `AVVulkanDeviceContext` queue
 fields, OpenCV 4.6 without `TrackerVit`, Vulkan headers without AV1 decode,

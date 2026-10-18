@@ -14,6 +14,7 @@ class SettingsPanel;
 class StabilizationPanel;
 class StitchingPanel;
 class TitleTextPanel;
+class TransitionPanel;
 
 // The right sidebar: the settings, in icon tabs by subject, each a column of
 // collapsible sections (SettingsPanel) that say what they apply to.
@@ -24,15 +25,17 @@ class TitleTextPanel;
 //              video clip (AudioPanel: a section per clip);
 //   Overlay -- the selected overlay video;
 //   Title   -- the selected title: its text, then where it sits and when;
+//   Transition -- the selected transition: its length;
 //   Privacy -- the clip's number-plate blur.
 // Owns the sections; MainWindow wires them to the model.
 //
 // Object names: settingsSidebar (TabSidebar's parts follow from it), the
 // pages videoSettings / audioSettings / overlaySettings / titleSettings /
-// privacySettings (their tab buttons <page>Tab), and the sections
-// stitchingPanel, stabilizationPanel, reframePanel, colourPanel,
-// mediaInfoPanel, overlayPanel, titleTextPanel, titlePlacementPanel,
-// privacyPanel (headers <section>Header); the Audio tab's are AudioPanel's.
+// transitionSettings / privacySettings (their tab buttons <page>Tab), and
+// the sections stitchingPanel, stabilizationPanel, reframePanel,
+// colourPanel, mediaInfoPanel, overlayPanel, titleTextPanel,
+// titlePlacementPanel, transitionPanel, privacyPanel (headers
+// <section>Header); the Audio tab's are AudioPanel's.
 class SettingsSidebar : public TabSidebar {
     Q_OBJECT
 
@@ -40,7 +43,7 @@ public:
     explicit SettingsSidebar(QWidget *parent = nullptr);
 
     // The tabs, in order.
-    enum Tab { VideoTab, AudioTab, OverlayTab, TitleTab, PrivacyTab };
+    enum Tab { VideoTab, AudioTab, OverlayTab, TitleTab, TransitionTab, PrivacyTab };
 
     StitchingPanel *stitching() const { return m_stitching; }
     StabilizationPanel *stabilization() const { return m_stabilization; }
@@ -51,6 +54,7 @@ public:
     OverlayPanel *overlay() const { return m_overlay; }
     TitleTextPanel *titleText() const { return m_titleText; }
     OverlayPanel *titlePlacement() const { return m_titlePlacement; } // kind Title
+    TransitionPanel *transition() const { return m_transition; }
     PrivacyPanel *privacy() const { return m_privacy; }
 
     // Every fixed section, tab by tab, top to bottom (not the Audio tab's:
@@ -67,6 +71,7 @@ private:
     OverlayPanel *m_overlay = nullptr;
     TitleTextPanel *m_titleText = nullptr;
     OverlayPanel *m_titlePlacement = nullptr;
+    TransitionPanel *m_transition = nullptr;
     PrivacyPanel *m_privacy = nullptr;
     QList<SettingsPanel *> m_sections;
 };

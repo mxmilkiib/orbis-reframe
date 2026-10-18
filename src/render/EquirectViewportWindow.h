@@ -23,6 +23,17 @@
 #include <memory>
 #include <vector>
 
+// A presented frame's own view and colour grade (its clip's reframe path at
+// its source time, and its clip's grade), applied with the picture in the
+// same render -- set from the clock instead, a cut would show one frame of a
+// clip through the next one's view. (EquirectViewportWindow::FrameView.)
+struct ViewportFrameView {
+    bool hasPose = false; // else the view stays (free look, a drag)
+    float pose[4] = {0.0f, 0.0f, 0.0f, 1.309f}; // yaw, pitch, roll, fovY
+    bool hasGrade = false;
+    float grade[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // ColorGrade::packed()
+};
+
 class EquirectViewportWindow : public QVulkanWindow {
     Q_OBJECT
 
@@ -48,8 +59,10 @@ public:
     // apart by a frame (at the stick mount's ~11 Hz shake that would undo
     // most of the stabilization). `outlines` are that frame's region
     // outlines; they replace the shown ones with the picture.
+    // A presented frame's own view and colour grade (ViewportFrameView).
+    using FrameView = ViewportFrameView;
     void SetFrame(int width, int height, std::vector<uint8_t> rgba, const float stab[9] = nullptr,
-                  std::vector<RegionOutline> outlines = {});
+                  std::vector<RegionOutline> outlines = {}, const FrameView &view = {});
 
     // Show a decoded fisheye pair instead of an equirect -- the
     // viewport then renders the view straight from the lenses every frame
@@ -57,7 +70,8 @@ public:
     // like SetFrame(); whichever of the two was called last wins. `stab` as
     // for SetFrame(). Only valid while LensFramesSupported().
     void SetLensFrame(std::shared_ptr<const render::LensFrame> frame,
-                      const float stab[9] = nullptr, std::vector<RegionOutline> outlines = {});
+                      const float stab[9] = nullptr, std::vector<RegionOutline> outlines = {},
+                      const FrameView &view = {});
     // Whether this viewport can import lens frames (its Vulkan device has
     // external-memory FD import on the same GPU). False until the renderer
     // has initialised, and after a failed import. Thread-safe.
@@ -102,8 +116,18 @@ public:
         bool locked = false; // a flat main clip: fills its place, can't be picked or dragged
     };
     void SetInsets(std::vector<InsetDraw> insets);
-    // The list to draw, with an in-progress drag applied. Renderer thread.
+    // SetInsets for the insets that go with the picture last set (SetFrame /
+    // SetLensFrame): while that picture waits for the renderer, the renderer
+    // keeps drawing the insets it had, and takes these with the picture --
+    // both change in the same render. A transition's layer must change on
+    // the same frame as the main picture under it, or that frame shows one
+    // clip blended with itself. (Insets() has them at once.)
+    void SetFrameInsets(std::vector<InsetDraw> insets);
+    // The list to draw, with an in-progress drag applied.
     std::vector<InsetDraw> Insets() const;
+    // Insets() as the renderer draws them: held back while SetFrameInsets'
+    // picture hasn't been taken (TakePendingFrame). Renderer thread.
+    std::vector<InsetDraw> RenderInsets();
 
     float Yaw() const { return m_yaw; }
     float Pitch() const { return m_pitch; }
@@ -290,4 +314,7 @@ private:
     MarkerStyle m_markerStyle = MarkerStyle::Select;
     bool m_pendingHasOverlay = false; // with the pending frame, guarded by m_frameMutex
     FrameOverlay m_pendingOverlay;
+    FrameView m_pendingView; // with the pending frame, guarded by m_frameMutex
+    bool m_insetsHeld = false;          // RenderInsets, guarded by m_insetMutex
+    std::vector<InsetDraw> m_renderInsets; // ... and what it drew last
 };

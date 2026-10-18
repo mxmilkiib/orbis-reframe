@@ -25,7 +25,8 @@ selected, or the clip under the playhead.
 
 1. Open the settings sidebar's **Privacy** tab and tick **Blur number plates**.
 2. Click **Scan clip**. orbis-reframe looks for plates in the whole clip
-   (its trimmed part), a little faster than the clip plays. The tab shows
+   (its trimmed part, and the footage past it that a
+   [crossfade](transitions.md) shows), a little faster than the clip plays. The tab shows
    how far it has come. **Stop scan** stops it and keeps the part scanned.
 3. When the scan is done, the tab says on how many frames it found
    plates, and every plate it found is blurred, in playback, screenshots and

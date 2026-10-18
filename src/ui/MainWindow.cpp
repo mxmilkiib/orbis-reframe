@@ -80,6 +80,7 @@
 #include "MediaImporter.h"
 #include "MediaPoolPanel.h"
 #include "TitlesPanel.h"
+#include "TransitionsPanel.h"
 #include "MediaProbe.h"
 #include "PlaybackController.h"
 #include "ReframeExportController.h"
@@ -140,6 +141,7 @@ MainWindow::MainWindow(QVulkanInstance *vulkanInstance, ClipBackend clipBackend,
     connectColour();
     connectMeasurements();
     connectPrivacy();
+    connectTransitions();
     setupMenus();
     setupViewMenu();
     setupKeyboardShortcuts();
@@ -253,6 +255,8 @@ void MainWindow::setupSourcesSidebar()
     m_sourcesSidebar->addTab(m_titlesPanel, QStringLiteral("type"), tr("Titles"));
     connect(m_titlesPanel, &TitlesPanel::addTitleRequested, this,
             [this] { addTitle(0, m_lastTimelineMs); });
+    m_transitionsPanel = new TransitionsPanel;
+    m_sourcesSidebar->addTab(m_transitionsPanel, QStringLiteral("blend"), tr("Transitions"));
     m_sourcesSidebar->setToggleKeys(
         QKeySequence(Qt::CTRL | Qt::Key_B).toString(QKeySequence::NativeText));
     m_sourcesSidebar->setOpen(
@@ -314,6 +318,7 @@ void MainWindow::setupLayout(QWidget *viewportContainer)
     m_overlayPanel = m_sidebar->overlay();         // starts with no overlay clip
     m_titleTextPanel = m_sidebar->titleText();     // ... and no title
     m_titlePlacementPanel = m_sidebar->titlePlacement();
+    m_transitionPanel = m_sidebar->transition();   // ... and no transition
     m_mediaInfoPanel = m_sidebar->mediaInfo();     // starts in its no-clip state
     // Open / closed, its width, its tab and which sections are open are
     // remembered per user, like the left sidebar's.
@@ -410,6 +415,16 @@ void MainWindow::setupPlayback()
     m_controller->setViewport(m_viewport);
     m_controller->setSourceFactory(m_clipBackend.makeSource);
     m_controller->setStabilizationProvider(m_stabilizers.provider());
+    m_controller->setViewProvider(m_frameViews.provider());
+    // The copy of every clip's reframe path and grade that presented frames
+    // take their view from: refreshed with any change to them or the clips.
+    const auto views = [this] { m_frameViews.update(*m_timeline); };
+    connect(m_timeline, &Timeline::clipReframeChanged, this, views);
+    connect(m_timeline, &Timeline::clipColorChanged, this, views);
+    connect(m_timeline, &Timeline::clipInserted, this, views);
+    connect(m_timeline, &Timeline::clipRemoved, this, views);
+    connect(m_timeline, &Timeline::clipsReordered, this, views);
+    views();
     m_playbackThread = new QThread(this);
     m_controller->moveToThread(m_playbackThread);
     connect(m_playbackThread, &QThread::finished, m_controller, &QObject::deleteLater);
@@ -535,7 +550,9 @@ void MainWindow::connectStitchAndStabilization()
                                               Q_ARG(qint64, m_lastTimelineMs));
                     // The privacy blur was found in one of the two stitches.
                     syncPrivacyPanel();
-                    if (c && !m_privacy.staleness(*c, c->trimInMs, c->trimOutMs, false).isEmpty())
+                    qint64 from = 0, to = 0;
+                    if (c && m_timeline->shownSourceRange(c->id, from, to) &&
+                        !m_privacy.staleness(*c, from, to, false).isEmpty())
                         m_editToolbar->showNotice(
                             tr("The privacy blur was found with the stabilization %1; it may sit "
                                "off the plates now. See the Privacy panel.")
@@ -797,7 +814,10 @@ void MainWindow::connectReframe()
     connect(m_editToolbar, &EditToolbar::reframeArmedChanged, this,
             [this](bool armed) { m_reframeArmed = armed; });
     connect(m_viewport, &EquirectViewportWindow::draggingChanged, this,
-            [this](bool active) { m_viewportDragging = active; });
+            [this](bool active) {
+                m_viewportDragging = active;
+                m_frameViews.setDragging(active);
+            });
     connect(m_viewport, &EquirectViewportWindow::lookCommitted, this, [this] {
         if (m_reframeArmed && m_clipId)
             m_timeline->upsertClipReframeKey(
@@ -1503,12 +1523,16 @@ void MainWindow::bindActiveClipAt(qint64 timelineMs)
         ensureStabilizers();
         updateSyncStatus();
     }
-    if (!c.reframe.isEmpty() && !m_viewportDragging)
+    // While playing, each presented frame brings its own view and grade
+    // (FrameViewCache): set from the clock here, they would change a frame
+    // apart from the picture at a cut.
+    if (!c.reframe.isEmpty() && !m_viewportDragging && !m_playing)
         applySampledPose(m_lastPositionMs);
     if (!m_viewportDragging)
         syncReframePanel();
     if (clipChanged) {
-        applyColorGrade(c.color); // the viewport shows this clip
+        if (!m_playing)
+            applyColorGrade(c.color); // the viewport shows this clip
         if (!selectedVideoClip()) // the panels follow the playhead unless a clip is selected
             refreshClipPanels();
     }
@@ -1533,6 +1557,8 @@ void MainWindow::selectVideoClip(int clipId)
     m_selectedClipId = clipId;
     if (clipId > 0 && m_selectedTrackClipId > 0)
         selectTrackClip(-1); // one selection at a time
+    if (clipId > 0 && m_selectedTransition)
+        selectTransition(0);
     refreshClipPanels();
 }
 
@@ -1708,7 +1734,9 @@ void MainWindow::selectTrackClip(int clipId)
         else if (!tc->isTitle() && tab == SettingsSidebar::TitleTab && selectedOverlayClip())
             m_sidebar->setCurrentIndex(SettingsSidebar::OverlayTab);
     }
-    if (clipId > 0 && m_selectedClipId > 0) { // one selection at a time
+    if (clipId > 0 && m_selectedTransition)
+        selectTransition(0); // one selection at a time
+    if (clipId > 0 && m_selectedClipId > 0) {
         m_selectedClipId = 0;
         refreshClipPanels();
     } else if (changed) {
@@ -1828,7 +1856,7 @@ void MainWindow::addTitle(int trackId, qint64 atMs)
 void MainWindow::pushInsetsToController()
 {
     const OutputSettings &out = m_project->output();
-    m_controller->setInsets(renderjobs::insetFeed(*m_timeline, out.width, out.height)); // thread-safe
+    m_controller->setInsets(renderjobs::insetFeed(*m_timeline, out.width, out.height, m_privacy)); // thread-safe
 }
 
 const TrackClip *MainWindow::selectedOverlayClip(int *trackId) const
@@ -2220,7 +2248,9 @@ void MainWindow::setupKeyboardShortcuts()
            {QKeySequence(Qt::Key_R)}, [this] { clearTrim(); });
     addKey(edit, tr("Split the selected audio / overlay clip, else the video clip, at the playhead"),
            {QKeySequence(Qt::Key_S)}, [this] { splitAtPlayhead(); });
-    addKey(edit, tr("Delete the selected clip, else the reframe keyframe at the playhead"),
+    addKey(edit,
+           tr("Delete the selected clip or transition, else the reframe keyframe at the "
+              "playhead"),
            {QKeySequence(Qt::Key_Delete), QKeySequence(Qt::Key_Backspace)},
            [this] { deleteAtPlayhead(); });
     addKey(edit,
@@ -2241,6 +2271,7 @@ void MainWindow::setupKeyboardShortcuts()
                }
                selectTrackClip(-1);
                selectVideoClip(0);
+               selectTransition(0);
            });
 
     const QString reframe = tr("Reframe");
@@ -2307,8 +2338,8 @@ void MainWindow::setupKeyboardShortcuts()
     const int tabs = std::min(m_sidebar->count(), 9);
     for (int i = 0; i < tabs; ++i)
         addKey(sidebars,
-               i == 0 ? tr("Show a settings tab (Video, Audio, Overlay, Title, Privacy); again to close "
-                           "the sidebar")
+               i == 0 ? tr("Show a settings tab (Video, Audio, Overlay, Title, Transition, "
+                           "Privacy); again to close the sidebar")
                       : QString(),
                {QKeySequence(Qt::ALT | kDigits[i])}, [this, i] { m_sidebar->toggleTab(i); },
                i == 0 ? QKeySequence(Qt::ALT | Qt::Key_1).toString(QKeySequence::NativeText) +
@@ -2433,6 +2464,10 @@ void MainWindow::splitAtPlayhead()
 
 void MainWindow::deleteAtPlayhead()
 {
+    if (m_selectedTransition) {
+        m_timeline->removeTransition(m_selectedTransition);
+        return;
+    }
     if (m_selectedTrackClipId > 0) {
         m_timeline->removeTrackClip(m_selectedTrackClipId);
         return;
@@ -2540,6 +2575,7 @@ void MainWindow::refreshTimelineWidget()
     }
     m_timelineWidget->setClips(clips);
     m_timelineWidget->setActiveClip(editClipId());
+    refreshTransitions(); // a trim or speed change moves what they play
     refreshTrackRows();
     m_editToolbar->setHasReframeKeys(activeHasKeys);
     updatePlayerBar();
@@ -3018,6 +3054,13 @@ void MainWindow::exportFlatVideo()
         QMessageBox::warning(this, tr("Export flat video"), syscheck::hwEncoderMissingText());
         return;
     }
+    // Every source looked for on the disk now (the marks follow), not as last
+    // checked: a missing main clip would only fail partway through, a
+    // missing overlay or sound clip would be left out without a word. Either
+    // way the user sorts it out first.
+    recheckMissingMedia();
+    if (!checkSourcesPresent(renderjobs::missingSources(*m_timeline)))
+        return;
 
     // One output frame rate for the whole timeline: the project's (Project
     // Settings), or clip 0's when it's "match first clip". Each clip is
@@ -3025,11 +3068,14 @@ void MainWindow::exportFlatVideo()
     // clip's speed (ReframeExportController).
     const double fps = m_project->output().effectiveFps(m_timeline->clipAt(0).fps);
 
-    // A clip with the privacy blur on is only exported once its whole
-    // trimmed range has been scanned for plates.
+    // A clip with the privacy blur on is only exported once all of it that
+    // shows has been scanned for plates: its trimmed range, and the footage
+    // past it that a transition plays.
     for (int i = 0; i < nclips; ++i) {
         const ClipItem &c = m_timeline->clipAt(i);
-        if (const QString why = m_privacy.blocker(c, c.trimInMs, c.trimOutMs); !why.isEmpty()) {
+        qint64 from = c.trimInMs, to = c.trimOutMs;
+        m_timeline->shownSourceRange(c.id, from, to);
+        if (const QString why = m_privacy.blocker(c, from, to); !why.isEmpty()) {
             QMessageBox::warning(this, tr("Export flat video"), why);
             return;
         }
@@ -3038,7 +3084,9 @@ void MainWindow::exportFlatVideo()
         QStringList stale;
         for (int i = 0; i < nclips; ++i) {
             const ClipItem &c = m_timeline->clipAt(i);
-            if (const QString w = m_privacy.staleness(c, c.trimInMs, c.trimOutMs, true); !w.isEmpty())
+            qint64 from = c.trimInMs, to = c.trimOutMs;
+            m_timeline->shownSourceRange(c.id, from, to);
+            if (const QString w = m_privacy.staleness(c, from, to, true); !w.isEmpty())
                 stale << w;
         }
         if (!confirmStalePrivacy(tr("Export flat video"), stale))
@@ -3095,7 +3143,7 @@ void MainWindow::exportFlatVideo()
         req.clips.push_back(exportJobFor(m_timeline->clipAt(i)));
     req.mix = renderjobs::mixClips(*m_timeline); // the audio tracks
     // The overlay tracks, over the flat main clips.
-    req.insets = renderjobs::insetJobs(*m_timeline, req.outWidth, req.outHeight);
+    req.insets = renderjobs::insetJobs(*m_timeline, req.outWidth, req.outHeight, m_privacy);
 
     // The export opens its own NativeStitchSource (on the shared decode
     // device) -- pause playback so the two stitch pipelines don't contend
@@ -3108,6 +3156,20 @@ void MainWindow::exportFlatVideo()
 ReframeExportController::ClipJob MainWindow::exportJobFor(const ClipItem &c) const
 {
     return renderjobs::clipJob(c, *m_timeline, m_privacy);
+}
+
+bool MainWindow::checkSourcesPresent(const QStringList &missing)
+{
+    if (missing.isEmpty())
+        return true;
+    QMessageBox box(QMessageBox::Warning, tr("Export flat video"),
+                    tr("The timeline can't be exported: these source files are missing."),
+                    QMessageBox::Ok, this);
+    box.setInformativeText(missing.join(QLatin1Char('\n')) + QStringLiteral("\n\n") +
+                           tr("If a file was moved or renamed, find it with Locate file… on it "
+                              "in the Media tab. Or remove its clips from the timeline."));
+    box.exec();
+    return false;
 }
 
 bool MainWindow::confirmStalePrivacy(const QString &title, const QStringList &warnings)
@@ -3193,11 +3255,14 @@ void MainWindow::syncPrivacyPanel()
 #else
     const bool canScan = false;
 #endif
-    QString status = m_privacy.status(*c);
+    // What shows of it: the trim, and past it where a transition plays on.
+    qint64 from = c->trimInMs, to = c->trimOutMs;
+    m_timeline->shownSourceRange(c->id, from, to);
+    QString status = m_privacy.status(*c, from, to);
     if (!cantScan.isEmpty())
         status += QLatin1Char(' ') + cantScan;
     m_privacyPanel->setState(c->blurPlates, status, canScan, static_cast<int>(c->blurRemovals.size()));
-    m_privacyPanel->setWarning(m_privacy.staleness(*c, c->trimInMs, c->trimOutMs, false));
+    m_privacyPanel->setWarning(m_privacy.staleness(*c, from, to, false));
 }
 
 #ifdef ORBIS_REFRAME_HAVE_PLATE_SCAN
@@ -3206,8 +3271,10 @@ platescan::Request MainWindow::plateRequestFor(const ClipItem &c)
     // The stitch as playback / export set it up for this clip.
     platescan::Request req;
     req.clipPath = c.sourcePath.toStdString();
-    req.fromMs = c.trimInMs;
-    req.toMs = c.trimOutMs;
+    qint64 from = c.trimInMs, to = c.trimOutMs;
+    m_timeline->shownSourceRange(c.id, from, to); // with a transition's footage past the trims
+    req.fromMs = from;
+    req.toMs = to;
     req.fps = c.fps;
     req.syncAdjustMs = std::isnan(c.syncAdjustMs) ? 0.0 : c.syncAdjustMs;
     seamAdjustFor(c.sourcePath, req.seamAdjustDeg);
@@ -3357,9 +3424,10 @@ void MainWindow::startPlateScan()
         setPlateSelecting(false);
     m_plateJobSource = c->sourcePath;
     m_plateJobClipId = c->id;
-    m_plateJobFromMs = c->trimInMs;
-    m_plateJobToMs = c->trimOutMs;
-    m_plateJobs->startScan(plateRequestFor(*c));
+    const platescan::Request req = plateRequestFor(*c);
+    m_plateJobFromMs = req.fromMs;
+    m_plateJobToMs = req.toMs;
+    m_plateJobs->startScan(req);
     m_privacyPanel->setScanRunning(true);
     m_privacyPanel->setScanStatus(tr("Starting…"));
     syncPrivacyPanel();
@@ -3609,6 +3677,20 @@ void MainWindow::takeScreenshot()
         QMessageBox::warning(this, tr("Screenshot"), why);
         return;
     }
+    // In a transition, the other clip shows too: past its trim.
+    for (const renderjobs::TransitionLayer &l : renderjobs::transitionLayers(*m_timeline)) {
+        if (l.clipIndex < 0)
+            continue; // black
+        const ClipItem &o = m_timeline->clipAt(l.clipIndex);
+        const qint64 end = l.startMs + std::llround((l.trimOutMs - l.trimInMs) / o.speed);
+        if (m_lastTimelineMs < l.startMs || m_lastTimelineMs >= end)
+            continue;
+        const qint64 at = l.trimInMs + std::llround((m_lastTimelineMs - l.startMs) * o.speed);
+        if (const QString why = m_privacy.blocker(o, at, at); !why.isEmpty()) {
+            QMessageBox::warning(this, tr("Screenshot"), why);
+            return;
+        }
+    }
     // A frame either side: the playhead's time is not the shown frame's.
     const qint64 frameMs = std::llround(1000.0 / c->fps);
     if (const QString w = m_privacy.staleness(*c, m_lastPositionMs - frameMs, m_lastPositionMs + frameMs, true);
@@ -3638,6 +3720,6 @@ void MainWindow::takeScreenshot()
 
     m_editToolbar->showNotice(tr("Saving screenshot…"), true);
     // The overlays showing at the playhead, composited like the export does.
-    still.insets = renderjobs::insetJobs(*m_timeline, still.width, still.height);
+    still.insets = renderjobs::insetJobs(*m_timeline, still.width, still.height, m_privacy);
     m_exports->startStill(std::move(still));
 }

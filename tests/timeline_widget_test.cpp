@@ -8,6 +8,7 @@
 // at the end.
 
 #include "TimelineWidget.h"
+#include "../src/core/Transition.h"
 
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -799,6 +800,86 @@ void testFoldSound()
 
 } // namespace
 
+// A transition: a box over its cut, at the top of the main row -- a click
+// selects it, its menu removes it, the trim edge below it still trims; a
+// transition dragged from the Transitions tab lands on the nearest cut.
+void testTransitions()
+{
+    Fixture f;
+    QSignalSpy selected(&f.w, &TimelineWidget::transitionSelected);
+    QSignalSpy clipSel(&f.w, &TimelineWidget::clipSelected);
+    QSignalSpy removed(&f.w, &TimelineWidget::transitionRemoveRequested);
+    QSignalSpy dropped(&f.w, &TimelineWidget::transitionDropped);
+    TimelineWidget::TransitionView t;
+    t.leftClipId = 1; // the cut at 10 s
+    t.durationMs = 2000;
+    f.w.setTransitions({t});
+    const int boxY = kRulerH + 3 + 8; // the box's middle
+
+    QTest::mouseClick(&f.w, Qt::LeftButton, Qt::NoModifier, QPoint(Fixture::x(10500), boxY));
+    CHECK(selected.count() == 1 && selected.last().at(0).toInt() == 1);
+    CHECK(clipSel.isEmpty());
+    // Lower in the row, the cut's edge is a trim handle as before.
+    QSignalSpy trimOut(&f.w, &TimelineWidget::clipTrimOutRequested);
+    drag(&f.w, QPoint(Fixture::x(10000) - 1, kRulerH + kMainH - 6),
+         QPoint(Fixture::x(9000), kRulerH + kMainH - 6));
+    CHECK(trimOut.count() == 1 && selected.count() == 1);
+    // Past the box: the clip.
+    QTest::mouseClick(&f.w, Qt::LeftButton, Qt::NoModifier, QPoint(Fixture::x(12000), boxY));
+    CHECK(selected.count() == 1 && clipSel.count() >= 1);
+
+    // Its menu removes it.
+    bool found = false;
+    QTimer::singleShot(0, [&] {
+        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        QAction *a = menu ? menu->findChild<QAction *>(QStringLiteral("transitionRemoveAction"))
+                          : nullptr;
+        found = a != nullptr;
+        if (!menu)
+            return;
+        if (a)
+            menu->setActiveAction(a);
+        QTest::keyClick(menu, a ? Qt::Key_Return : Qt::Key_Escape);
+    });
+    const QPoint at(Fixture::x(9800), boxY);
+    QContextMenuEvent e(QContextMenuEvent::Mouse, at, f.w.mapToGlobal(at));
+    QApplication::sendEvent(&f.w, &e);
+    CHECK(found && removed.count() == 1 && removed.last().at(0).toInt() == 1);
+    CHECK(selected.count() == 2); // the menu's transition is selected too
+
+    // One that can't play still has a box to click.
+    t.durationMs = 0;
+    f.w.setTransitions({t});
+    QTest::mouseClick(&f.w, Qt::LeftButton, Qt::NoModifier, QPoint(Fixture::x(10000) + 4, boxY));
+    CHECK(selected.count() == 3);
+
+    // A transition from the Transitions tab: onto the cut nearest the pointer.
+    const auto dropTransition = [](QWidget *w, QPoint at) {
+        QMimeData mime;
+        mime.setData(QString::fromLatin1(Transition::kMimeType), "crossfade");
+        QDragEnterEvent enter(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(w, &enter);
+        if (!enter.isAccepted())
+            return false;
+        QDragMoveEvent move(at, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(w, &move);
+        QDropEvent drop(QPointF(at), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(w, &drop);
+        return true;
+    };
+    CHECK(dropTransition(&f.w, QPoint(Fixture::x(3000), trackY(0))));
+    CHECK(dropped.count() == 1 && dropped.last().at(0).toInt() == 1 &&
+          dropped.last().at(1).toString() == QLatin1String("crossfade"));
+    // One clip: no cut to take it.
+    TimelineWidget one;
+    TimelineWidget::Clip c;
+    c.id = 7;
+    c.trimOutMs = c.sourceDurationMs = 5000;
+    one.setClips({c});
+    one.resize(kWidth, one.sizeHint().height());
+    CHECK(!dropTransition(&one, QPoint(Fixture::x(1000), mainY())));
+}
+
 // The main clip's menu: Duplicate asks for a copy of the clip clicked.
 void testDuplicateMenu()
 {
@@ -833,6 +914,7 @@ int main(int argc, char **argv)
     testTrims();
     testHeaderAndMain();
     testDuplicateMenu();
+    testTransitions();
     testZoom();
     testTrackHeaders();
     testDrop();

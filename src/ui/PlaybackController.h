@@ -181,6 +181,15 @@ public:
         int clipId, qint64 sourceMs, std::vector<EquirectViewportWindow::RegionOutline> &out)>;
     void setOutlineProvider(OutlineProvider provider);
 
+    // The view and colour grade for a presented frame (its clip's reframe
+    // path at source time `sourceMs`, its grade). Called like the
+    // StabProvider and handed to the viewport with the frame, so a cut
+    // changes the view on the frame it changes the picture. Thread-safe to
+    // set from the GUI thread.
+    using ViewProvider = std::function<void(int clipId, qint64 sourceMs,
+                                            EquirectViewportWindow::FrameView &view)>;
+    void setViewProvider(ViewProvider provider);
+
     // The video tracks' inset clips, bottom-most first. Thread-safe,
     // callable from the GUI thread; they're drawn over the view from the next
     // present tick, at the playhead.
@@ -279,6 +288,7 @@ private:
     bool m_presentAfterSeek = false;
     uint64_t m_shownGen = 0; // seek generation of the frame on screen
     qint64 m_shownMs = 0;    // and its timeline time
+    int m_shownClipId = 0;   // and clip (Segment::clipId): what a transition's layer goes over
     QTimer *m_settleTimer = nullptr; // scrub(): the pointer rested -> settle()
     bool m_buffering = false;
     bool m_reachedEnd = false;
@@ -369,6 +379,7 @@ private:
     std::mutex m_stabMx;
     StabProvider m_stabProvider; // guarded by m_stabMx
     OutlineProvider m_outlineProvider; // guarded by m_stabMx
+    ViewProvider m_viewProvider;       // guarded by m_stabMx
     std::mutex m_rsMx;
     std::map<int, RsSetting> m_rsSettings; // guarded by m_rsMx
     std::map<QString, std::array<double, 3>> m_seamAdjust; // guarded by m_rsMx, same generation

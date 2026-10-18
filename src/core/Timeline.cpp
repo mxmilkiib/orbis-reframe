@@ -231,6 +231,8 @@ int Timeline::insertClip(int index, const QString &sourcePath, qint64 sourceDura
     emit durationChanged(totalDurationMs());
     if (relinkAudio()) // clips after it moved
         emit tracksChanged();
+    if (pruneTransitions()) // it went into a cut
+        emit transitionsChanged();
     addClipSound(c.id, audioStreams);
     return c.id;
 }
@@ -253,6 +255,8 @@ bool Timeline::removeClip(int clipId)
     emit durationChanged(totalDurationMs());
     if (relinkAudio() || audio)
         emit tracksChanged();
+    if (pruneTransitions())
+        emit transitionsChanged();
     return true;
 }
 
@@ -268,6 +272,8 @@ bool Timeline::moveClip(int clipId, int toIndex)
     emit clipsReordered();
     if (relinkAudio())
         emit tracksChanged();
+    if (pruneTransitions())
+        emit transitionsChanged();
     return true;
 }
 
@@ -291,12 +297,16 @@ int Timeline::splitClip(int clipId, qint64 atSourceMs)
 
     m_clips.insert(i + 1, right); // may reallocate -- don't touch `left` after this
     const bool audio = splitLinkedAudio(leftId, right.id, atSourceMs);
+    // The cut after it is the right part's now.
+    const bool moved = moveTransitionLeft(leftId, right.id);
 
     emit clipInserted(i + 1);
     emit clipTrimChanged(leftId, leftIn, leftOut);
     emit durationChanged(totalDurationMs());
     if (relinkAudio() || audio)
         emit tracksChanged();
+    if (moved)
+        emit transitionsChanged();
     return right.id;
 }
 
@@ -308,6 +318,7 @@ int Timeline::duplicateClip(int clipId)
     ClipItem copy = m_clips.at(i);
     copy.id = m_nextId++;
     m_clips.insert(i + 1, copy);
+    const bool moved = moveTransitionLeft(clipId, copy.id); // the cut after it is the copy's now
     bool audio = false;
     for (Track &t : m_tracks) {
         QList<TrackClip> added;
@@ -329,11 +340,17 @@ int Timeline::duplicateClip(int clipId)
     emit durationChanged(totalDurationMs());
     if (relinkAudio() || audio)
         emit tracksChanged();
+    if (moved)
+        emit transitionsChanged();
     return copy.id;
 }
 
 void Timeline::clear()
 {
+    if (!m_transitions.isEmpty()) {
+        m_transitions.clear();
+        emit transitionsChanged();
+    }
     if (!m_tracks.isEmpty()) {
         m_tracks.clear();
         emit tracksChanged();
@@ -343,6 +360,113 @@ void Timeline::clear()
     m_clips.clear();
     emit clipsReordered();
     emit durationChanged(0);
+}
+
+const Transition *Timeline::transitionAfter(int leftClipId) const
+{
+    for (const Transition &t : m_transitions)
+        if (t.leftClipId == leftClipId)
+            return &t;
+    return nullptr;
+}
+
+Timeline::TransitionSpan Timeline::transitionSpan(const Transition &t) const
+{
+    TransitionSpan span;
+    const int i = indexOfId(t.leftClipId);
+    if (i < 0 || i + 1 >= m_clips.size() || m_clips.at(i + 1).id != t.rightClipId)
+        return span;
+    const ClipItem &a = m_clips.at(i);
+    const ClipItem &b = m_clips.at(i + 1);
+    span.cutMs = clipToTimeline(i + 1, 0);
+    // Each half, in timeline ms: what's asked for, the footage past the trim
+    // on that side (at the clip's speed), and half the clip.
+    qint64 half = t.durationMs / 2;
+    const auto cap = [&half, &span](qint64 limitMs, TransitionSpan::Limit why) {
+        if (limitMs < half) {
+            half = std::max<qint64>(0, limitMs);
+            span.limit = why;
+        }
+    };
+    if (t.usesHandles()) {
+        cap(static_cast<qint64>(std::floor((a.sourceDurationMs - a.trimOutMs) / a.speed)),
+            TransitionSpan::Limit::FootageBefore);
+        cap(static_cast<qint64>(std::floor(b.trimInMs / b.speed)),
+            TransitionSpan::Limit::FootageAfter);
+    }
+    cap(std::min(a.timelineDurationMs(), b.timelineDurationMs()) / 2,
+        TransitionSpan::Limit::ClipLength);
+    span.durationMs = 2 * half;
+    return span;
+}
+
+bool Timeline::shownSourceRange(int clipId, qint64 &fromMs, qint64 &toMs) const
+{
+    const int i = indexOfId(clipId);
+    if (i < 0)
+        return false;
+    const ClipItem &c = m_clips.at(i);
+    fromMs = c.trimInMs;
+    toMs = c.trimOutMs;
+    if (i > 0)
+        if (const Transition *t = transitionAfter(m_clips.at(i - 1).id); t && t->usesHandles())
+            if (const TransitionSpan s = transitionSpan(*t); s.plays())
+                fromMs -= std::llround(s.durationMs / 2 * c.speed);
+    if (const Transition *t = transitionAfter(clipId); t && t->usesHandles())
+        if (const TransitionSpan s = transitionSpan(*t); s.plays())
+            toMs += std::llround(s.durationMs / 2 * c.speed);
+    return true;
+}
+
+bool Timeline::setTransition(int leftClipId, Transition::Type type, qint64 durationMs)
+{
+    const int i = indexOfId(leftClipId);
+    if (i < 0 || i + 1 >= m_clips.size())
+        return false;
+    Transition t;
+    t.leftClipId = leftClipId;
+    t.rightClipId = m_clips.at(i + 1).id;
+    t.type = type;
+    t.durationMs = std::clamp(durationMs, Transition::kMinMs, Transition::kMaxMs);
+    for (Transition &o : m_transitions)
+        if (o.leftClipId == leftClipId) {
+            if (o == t)
+                return false;
+            o = t;
+            emit transitionsChanged();
+            return true;
+        }
+    m_transitions.append(t);
+    emit transitionsChanged();
+    return true;
+}
+
+bool Timeline::removeTransition(int leftClipId)
+{
+    const qsizetype n = m_transitions.removeIf(
+        [leftClipId](const Transition &t) { return t.leftClipId == leftClipId; });
+    if (n == 0)
+        return false;
+    emit transitionsChanged();
+    return true;
+}
+
+bool Timeline::pruneTransitions()
+{
+    return m_transitions.removeIf([this](const Transition &t) {
+        const int i = indexOfId(t.leftClipId);
+        return i < 0 || i + 1 >= m_clips.size() || m_clips.at(i + 1).id != t.rightClipId;
+    }) > 0;
+}
+
+bool Timeline::moveTransitionLeft(int fromLeftId, int toLeftId)
+{
+    for (Transition &t : m_transitions)
+        if (t.leftClipId == fromLeftId) {
+            t.leftClipId = toLeftId;
+            return true;
+        }
+    return false;
 }
 
 std::vector<Timeline::ClipPlan> Timeline::playbackPlan() const

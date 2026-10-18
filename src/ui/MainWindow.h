@@ -25,6 +25,7 @@
 #include "ClipBackend.h"              // ClipBackend
 #include "ShortcutHelp.h"             // KeyHelp
 #include "StabilizerCache.h"          // StabilizerCache
+#include "FrameViewCache.h"           // FrameViewCache
 #include "ReframeExportController.h" // ReframeExportController::ClipJob
 #include "../core/ClipItem.h"         // ColorGrade (the copied grade)
 #include "../core/InsetGeometry.h"    // inset::Look (overlays)
@@ -61,6 +62,8 @@ class ReframePanel;
 class MediaPoolPanel;
 class TitlesPanel;
 class TitleTextPanel;
+class TransitionsPanel;
+class TransitionPanel;
 class SettingsSidebar;
 class TabSidebar;
 class QActionGroup;
@@ -132,6 +135,7 @@ private:
     void connectColour();
     void connectMeasurements();
     void connectPrivacy();
+    void connectTransitions();
     void setupMenus();
     void connectController();
     void connectPlayerBar();
@@ -217,6 +221,16 @@ private:
     // (-1 = none); react to any change to them.
     void refreshTrackRows();
     void selectTrackClip(int clipId);
+    // Transitions (MainWindowTransitions.cpp). Select the one at the cut
+    // after clip `leftClipId` (0 = none): the Transition tab shows it.
+    void selectTransition(int leftClipId);
+    // Put a transition of `type` (Transition::typeName) at the cut after
+    // clip `leftClipId`, or at the cut nearest the playhead; it's selected.
+    void addTransition(int leftClipId, const QString &type);
+    void addTransitionAtPlayhead(const QString &type);
+    // The timeline's transition boxes and the Transition panel, from the
+    // model (after a transition, trim or speed changed).
+    void refreshTransitions();
     // The video clip selected by a click on the timeline (0 = none: the
     // panels then follow the playhead). The panels (Audio, Colour, Media
     // info) and the trim buttons edit editClipId(): the selected clip, else
@@ -241,6 +255,9 @@ private:
     // Before an export / screenshot: false when a clip's blur is stale and
     // the user cancels.
     bool confirmStalePrivacy(const QString &title, const QStringList &warnings);
+    // Before an export: false, after saying which, when any of `missing`
+    // (source files) is missing -- the user sorts them out first.
+    bool checkSourcesPresent(const QStringList &missing);
     void startPlateScan();
     // "Blur a plate…": arm / disarm the box select for it; follow the plate
     // in a drawn box (output-rect fractions) from the playhead on.
@@ -417,6 +434,7 @@ private:
     TabSidebar *m_sourcesSidebar = nullptr;
     MediaPoolPanel *m_mediaPanel = nullptr;
     TitlesPanel *m_titlesPanel = nullptr;
+    TransitionsPanel *m_transitionsPanel = nullptr;
     MediaImporter *m_mediaImport = nullptr; // Import files… / folder…, drops, Locate file…
     QList<QShortcut *> m_editorShortcuts;
     QActionGroup *m_previewQuality = nullptr; // View menu
@@ -440,6 +458,7 @@ private:
     OverlayPanel *m_overlayPanel = nullptr;        // overlay videos
     TitleTextPanel *m_titleTextPanel = nullptr;     // the Title tab: a title's text
     OverlayPanel *m_titlePlacementPanel = nullptr;  // ... and its position and timing
+    TransitionPanel *m_transitionPanel = nullptr;   // the selected transition
     MediaInfoPanel *m_mediaInfoPanel = nullptr;
     QHash<QString, insv::MediaInfo> m_mediaInfo; // source path -> probe
     // The edit model: a Project owning a Timeline. Authoring (trim via [ ],
@@ -453,6 +472,7 @@ private:
     int m_clipId = 0;
     int m_selectedTrackClipId = -1; // an audio clip selected on the timeline
     int m_selectedClipId = 0;       // a video clip selected on the timeline
+    int m_selectedTransition = 0;   // a transition selected: the clip before its cut
     std::unique_ptr<TrackFiles> m_trackFiles; // audio files and overlay videos onto tracks
     WaveformCache *m_waveforms = nullptr;
     // The Media tab's thumbnails on disk; shared with the panel's worker
@@ -462,6 +482,7 @@ private:
     // Native gyro stabilization, per clip; the clip under the playhead and
     // the next one are built ahead (ensureStabilizers()).
     StabilizerCache m_stabilizers;
+    FrameViewCache m_frameViews; // each clip's reframe path and grade, for presented frames
     // Hand every clip's built stabilizer (and its capture-time correction)
     // to playback. Call after the cache or the clips change.
     void publishStabilizer();

@@ -53,7 +53,7 @@ remembers this for each kind of track. Each section has:
 | **Noise** and **Strength** | Noise reduction, see below. |
 | **Track level** and **Mute track** | The volume of the whole track the clip is on, on top of each clip's own level, and muting it. |
 | **Level** and **Mute** | This clip's own volume, from −24 dB to +12 dB, and muting it. 0 dB leaves it as recorded; negative values make it quieter, positive values louder. |
-| **Fade in** / **Fade out** | Fades the clip in from silence at its start, or out to silence at its end, over this many seconds. The fades show as slanted lines over the clip's waveform. |
+| **Fade in** / **Fade out** | Fades the clip in from silence at its start, or out to silence at its end, over this many seconds. The fades show as slanted lines over the clip's waveform. At a [transition](transitions.md), a video clip's own sound fades with the picture instead: crossfading with the next clip's, or out and in at a dip to black (where a longer fade of its own wins). |
 | **Start** | Where the clip starts on the timeline, in seconds. The arrows move it by 10 milliseconds, for lining up a separate recorder with the picture (see below). Greyed out for a linked clip, which moves with its video. |
 
 The waveform drawn on each clip shows how loud it is, with its level and

@@ -348,6 +348,82 @@ void testColorGrade()
 
 } // namespace
 
+// A layer whose pictures come from a PictureSource (a transition's other
+// clip, a 360 clip's view): asked for at its source time and at the rect's
+// size, faded by its opacity ramp; one that can't open fails the frame.
+namespace {
+
+struct FakePicture : exportpipe::PictureSource {
+    std::vector<int64_t> *asked;
+    bool ok;
+    int w = 0, h = 0;
+    exportpipe::VideoFrame frame;
+    std::string error;
+    FakePicture(std::vector<int64_t> *a, bool o) : asked(a), ok(o) {}
+    bool open(std::string &err) override
+    {
+        if (!ok)
+            err = "no such clip";
+        return ok;
+    }
+    double fps() const override { return 30.0; }
+    void setOutputSize(int width, int height) override
+    {
+        w = width;
+        h = height;
+    }
+    const exportpipe::VideoFrame *frameAt(int64_t ms) override
+    {
+        asked->push_back(ms);
+        frame.ptsMs = ms;
+        frame.width = w;
+        frame.height = h;
+        frame.rgba.assign(size_t(w) * h * 4, 255); // white
+        return &frame;
+    }
+    bool readNext(exportpipe::VideoFrame &) override { return false; }
+    const std::string &lastError() const override { return error; }
+};
+
+} // namespace
+
+void testPictureLayer()
+{
+    constexpr int W = 64, H = 36;
+    std::vector<int64_t> asked;
+    exportpipe::InsetClipJob j;
+    j.path = "/c/b.insv";
+    j.startMs = 1000;
+    j.trimInMs = 4000;
+    j.trimOutMs = 6000;
+    j.speed = 2.0; // 1 s on the timeline
+    j.aspect = double(W) / H;
+    j.rampFrom = 0.0f;
+    j.rampTo = 0.5f;
+    j.lookAt = [](int64_t) { return inset::fitted(double(W) / H, W, H, false); };
+    j.picture = [&asked] { return std::make_unique<FakePicture>(&asked, true); };
+    exportpipe::InsetCompositor comp({j}, W, H);
+    std::vector<uint8_t> y(size_t(W) * H), uv(size_t(W) * H / 2);
+    std::string err;
+    const auto lumaAt = [&](int64_t ms) {
+        std::fill(y.begin(), y.end(), 16); // black
+        std::fill(uv.begin(), uv.end(), 128);
+        CHECK(comp.composite(ms, y.data(), W, uv.data(), W, err));
+        return int(y[size_t(H / 2) * W + W / 2]);
+    };
+    CHECK(lumaAt(500) == 16 && asked.empty()); // before it
+    CHECK(lumaAt(1000) == 16);                 // opacity 0 at its start
+    CHECK(std::abs(lumaAt(1500) - (16 + 219 / 4)) <= 2); // a quarter
+    CHECK(std::abs(lumaAt(1990) - (16 + 219 / 2)) <= 3); // nearly half at its end
+    CHECK(lumaAt(2000) == 16); // past it
+    CHECK(asked.size() >= 2 && asked.back() == 4000 + 990 * 2); // its source time
+    exportpipe::InsetClipJob bad = j;
+    bad.picture = [&asked] { return std::make_unique<FakePicture>(&asked, false); };
+    exportpipe::InsetCompositor failing({bad}, W, H);
+    CHECK(!failing.composite(1500, y.data(), W, uv.data(), W, err));
+    CHECK(err.find("/c/b.insv") != std::string::npos && err.find("no such clip") != std::string::npos);
+}
+
 // inset::fitted: a flat main-track clip's full-frame layer.
 void testFitted()
 {
@@ -383,6 +459,7 @@ int main()
     testFullFrameCopy(dir);
     testColorGrade();
     testFitted();
+    testPictureLayer();
     if (!std::getenv("INSET_TEST_KEEP")) {
         for (const char *f : {"/solid.mp4", "/rot90.mp4", "/hd.mp4", "/tall.mp4"})
             std::remove((dir + f).c_str());

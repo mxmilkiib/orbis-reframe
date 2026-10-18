@@ -2,6 +2,7 @@
 
 #include "TrackClip.h"
 #include "ClipItem.h"
+#include "Transition.h"
 
 #include <QHash>
 #include <QList>
@@ -13,8 +14,9 @@
 #include <string>
 #include <vector>
 
-// The main video track -- an ordered list of ClipItems laid end to end, hard
-// cuts, no gaps or transitions -- plus any number of extra tracks under it,
+// The main video track -- an ordered list of ClipItems laid end to end, no
+// gaps, a cut between two clips either hard or a transition (Transition.h)
+// -- plus any number of extra tracks under it,
 // whose clips sit at free positions: audio tracks, and video (overlay) tracks
 // whose clips are drawn as insets over the output (grouped, see Track). The main track
 // defines the timeline's length; anything on the extra tracks past its end is
@@ -81,6 +83,32 @@ public:
         qint64 trimOutMs = 0;
     };
     std::vector<ClipPlan> playbackPlan() const;
+
+    // --- transitions (Transition.h) ------------------------------------
+    // In no particular order.
+    const QList<Transition> &transitions() const { return m_transitions; }
+    // The transition at the cut after main-track clip `leftClipId`, or null.
+    const Transition *transitionAfter(int leftClipId) const;
+    // What a transition plays as, centred on its cut at `cutMs`: its
+    // duration, shortened to the footage there is past the two clips' trims
+    // (at their speeds; one that uses it, Transition::usesHandles) and to
+    // half of either clip, so the transitions at a
+    // clip's two ends never meet. `limit` says what shortened it.
+    struct TransitionSpan {
+        enum class Limit { None, FootageBefore, FootageAfter, ClipLength };
+        qint64 cutMs = 0;
+        qint64 durationMs = 0; // even; < Transition::kMinMs => it doesn't play
+        Limit limit = Limit::None;
+        bool plays() const { return durationMs >= Transition::kMinMs; }
+        qint64 startMs() const { return cutMs - durationMs / 2; }
+        qint64 endMs() const { return cutMs + durationMs / 2; }
+    };
+    // A zero span if the transition's clips aren't on the timeline.
+    TransitionSpan transitionSpan(const Transition &t) const;
+    // The source range main-track clip `clipId` shows: its trim, widened by
+    // the footage the transitions at its two ends play past it (half of
+    // each crossfade, at the clip's speed). False if there's no such clip.
+    bool shownSourceRange(int clipId, qint64 &fromMs, qint64 &toMs) const;
 
     // --- extra tracks --------------------------------------------------
     // Ordered top to bottom below the main track, group by group
@@ -175,8 +203,18 @@ public slots:
     // privacy, fit) and a copy of its linked sound; the clips after it move
     // right. Returns the copy's id, or 0 if there's no such clip.
     int duplicateClip(int clipId);
-    // Drop every clip and every extra track.
+    // Drop every clip, transition and extra track.
     void clear();
+
+    // --- transitions ------------------------------------------------------
+    // Put a transition of `type` at the cut after main-track clip
+    // `leftClipId`, or change the one there; `durationMs` is clamped to
+    // [Transition::kMinMs, kMaxMs]. False if there's no clip after it, or
+    // nothing changed.
+    bool setTransition(int leftClipId, Transition::Type type, qint64 durationMs);
+    // Remove the transition at the cut after `leftClipId`. True if there was
+    // one.
+    bool removeTransition(int leftClipId);
 
     // --- extra tracks --------------------------------------------------
     // Add a track at the end of its group (Track::Group): a free audio
@@ -371,6 +409,11 @@ signals:
     // Only clips' mediaMissing changed (setSourcesMissing): consumers that
     // skip or mark missing clips refresh.
     void mediaMissingChanged();
+    // A transition was added, changed or removed -- by hand, or dropped
+    // because its cut went (a clip moved or removed). A trim or speed change
+    // can change what one plays as (transitionSpan) without this: it comes
+    // with its own signal.
+    void transitionsChanged();
 
 private:
     ClipItem *mutableClipById(int id);
@@ -416,7 +459,16 @@ private:
     // Move clip `clipId` from `from` to `to` keeping its time. No signal.
     void transferTrackClip(int clipId, Track *from, Track *to);
 
+    // Drop the transitions whose cut is gone (their clips no longer next to
+    // each other). True if any went.
+    bool pruneTransitions();
+    // The transition at the cut after `fromLeftId` now belongs to the cut
+    // after `toLeftId` (a split or a copy put a clip in between): the clip
+    // after it stays the same. True if there was one. No signal.
+    bool moveTransitionLeft(int fromLeftId, int toLeftId);
+
     QList<ClipItem> m_clips;
+    QList<Transition> m_transitions;
     QList<Track> m_tracks;
     int m_nextId = 1; // shared by main and audio clips: ids are timeline-unique
     int m_nextTrackId = 1;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "InsetGeometry.h"
+#include "PictureSource.h"
 
 #include <array>
 #include <cmath>
@@ -20,8 +21,9 @@
 // filling the frame, mostly -- is decoded to NV12 at its size and copied in;
 // the rest are blended per pixel, across the cores.
 //
-// Each clip's frames come from its own FlatVideoReader, opened on first use
-// and closed once the export is past the clip.
+// Each clip's frames come from its own FlatVideoReader (or PictureSource,
+// for a 360 clip's view), opened on first use and closed once the export is
+// past the clip.
 
 namespace exportpipe {
 
@@ -36,6 +38,11 @@ struct InsetClipJob {
     double aspect = 16.0 / 9.0; // display width / height
     int64_t fadeInMs = 0;
     int64_t fadeOutMs = 0;
+    // Opacity over the clip, on top of the look's and the fades: a straight
+    // ramp from rampFrom at its start to rampTo at its end (a transition's
+    // other clip).
+    float rampFrom = 1.0f;
+    float rampTo = 1.0f;
     inset::Frame frame;
     // The look at a source time (keyframes sampled; fades not applied).
     // Called on the export thread.
@@ -48,6 +55,10 @@ struct InsetClipJob {
     // alpha, like every picture.
     std::shared_ptr<const std::vector<uint8_t>> still;
     int stillW = 0, stillH = 0;
+    // A 360 clip's view (a transition's other clip): its frames from this
+    // instead of a file's (`path` names it in messages). It carries its own
+    // grade.
+    PictureSource::Factory picture;
 
     int64_t spanMs() const { return static_cast<int64_t>(std::llround((trimOutMs - trimInMs) / speed)); }
     int64_t endMs() const { return startMs + spanMs(); }

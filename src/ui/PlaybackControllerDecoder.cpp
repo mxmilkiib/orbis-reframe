@@ -157,6 +157,12 @@ void PlaybackController::setStabilizationProvider(StabProvider provider)
     m_stabProvider = std::move(provider);
 }
 
+void PlaybackController::setViewProvider(ViewProvider provider)
+{
+    std::lock_guard<std::mutex> lk(m_stabMx);
+    m_viewProvider = std::move(provider);
+}
+
 void PlaybackController::setOutlineProvider(OutlineProvider provider)
 {
     std::lock_guard<std::mutex> lk(m_stabMx);

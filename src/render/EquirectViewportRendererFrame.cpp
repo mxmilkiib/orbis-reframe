@@ -427,7 +427,7 @@ void EquirectViewportRenderer::startNextFrame()
     // Insets: upload any new pictures (outside the render pass).
     std::vector<EquirectViewportWindow::InsetDraw> insets;
     if (m_insetPipeline != VK_NULL_HANDLE)
-        insets = m_window->Insets();
+        insets = m_window->RenderInsets();
     if (insets.size() > size_t(EquirectViewportWindow::kMaxInsets))
         insets.resize(EquirectViewportWindow::kMaxInsets);
     for (size_t i = 0; i < insets.size(); ++i) {

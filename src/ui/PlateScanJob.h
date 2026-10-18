@@ -25,8 +25,10 @@ namespace platescan {
 
 struct Request {
     std::string clipPath;
-    int64_t fromMs = 0; // source time: the clip's trim-in
-    int64_t toMs = 0;   // ... and trim-out
+    // Source time: what of the clip shows -- its trim, and the footage past
+    // it a transition plays (Timeline::shownSourceRange).
+    int64_t fromMs = 0;
+    int64_t toMs = 0;
     double fps = 30.0;
     double syncAdjustMs = 0.0; // the clip's video <-> IMU fine-tune
     std::array<double, 3> seamAdjustDeg{0.0, 0.0, 0.0};

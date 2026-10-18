@@ -17,6 +17,7 @@
 #include "panels/MediaInfoPanel.h"
 #include "panels/OverlayPanel.h"
 #include "panels/TitleTextPanel.h"
+#include "panels/TransitionPanel.h"
 #include "panels/PrivacyPanel.h"
 #include "panels/ReframePanel.h"
 #include "panels/StabilizationPanel.h"
@@ -74,9 +75,9 @@ QStringList sectionNames(QScrollArea *page)
 void testLayout(SettingsSidebar &bar)
 {
     CHECK(bar.objectName() == QLatin1String("settingsSidebar"));
-    CHECK(bar.count() == 5);
-    const char *pages[] = {"videoSettings", "audioSettings", "overlaySettings", "titleSettings",
-                           "privacySettings"};
+    CHECK(bar.count() == 6);
+    const char *pages[] = {"videoSettings",   "audioSettings",      "overlaySettings",
+                           "titleSettings",   "transitionSettings", "privacySettings"};
     for (const char *name : pages) {
         find<QScrollArea>(&bar, name);
         find<QToolButton>(&bar, (QByteArray(name) + "Tab").constData());
@@ -103,7 +104,8 @@ void testLayout(SettingsSidebar &bar)
     CHECK(bar.colour()->isExpanded());
     CHECK(!bar.overlay()->isCollapsible() && bar.overlay()->isExpanded());
     CHECK(!bar.privacy()->isCollapsible());
-    CHECK(bar.sections().size() == 9); // the Audio tab's come and go (testAudioSections)
+    CHECK(!bar.transition()->isCollapsible());
+    CHECK(bar.sections().size() == 10); // the Audio tab's come and go (testAudioSections)
 
     // Wide enough for every section: the pages don't scroll sideways.
     for (const char *name : pages)
@@ -460,6 +462,54 @@ void testTrackStatus(SettingsSidebar &bar)
     CHECK(!status->isVisible());
 }
 
+// The Transition tab: the selected transition's length, why it plays
+// shorter, and removing it; greyed out with none selected.
+void testTransitionTab(SettingsSidebar &bar)
+{
+    bar.setCurrentIndex(SettingsSidebar::TransitionTab);
+    QApplication::processEvents();
+    TransitionPanel *panel = bar.transition();
+    auto *duration = find<QDoubleSpinBox>(&bar, "transitionDuration");
+    auto *note = find<QLabel>(&bar, "transitionNote");
+    auto *remove = find<QPushButton>(&bar, "transitionRemove");
+    auto *cut = find<QLabel>(&bar, "transitionCut");
+    if (!duration || !note || !remove || !cut)
+        return;
+    CHECK(!duration->isEnabled() && !remove->isEnabled() && note->isHidden());
+
+    QSignalSpy edited(panel, &TransitionPanel::durationEdited);
+    QSignalSpy removed(panel, &TransitionPanel::removeRequested);
+    Transition t;
+    t.durationMs = 1500;
+    panel->setTransition(t, QStringLiteral("“a” and “b”"), QString());
+    CHECK(duration->isEnabled() && remove->isEnabled() && note->isHidden());
+    CHECK(duration->value() == 1.5 && cut->text().contains(QStringLiteral("“b”")));
+    CHECK(edited.isEmpty()); // showing it isn't an edit
+    panel->setTransition(t, QString(), QStringLiteral("Plays 0.6 s: …"));
+    CHECK(note->isVisibleTo(panel) && note->text().startsWith(QStringLiteral("Plays")));
+
+    duration->setValue(2.0);
+    CHECK(edited.size() == 1 && edited.first().first().toLongLong() == 2000);
+    QTest::mouseClick(remove, Qt::LeftButton);
+    CHECK(removed.size() == 1);
+    // The type: shown, and picked.
+    auto *type = find<QComboBox>(&bar, "transitionType");
+    QSignalSpy typed(panel, &TransitionPanel::typeEdited);
+    t.type = Transition::Type::DipToBlack;
+    panel->setTransition(t, QString(), QString());
+    CHECK(type && type->isEnabled() && type->currentText() == QStringLiteral("Dip to black"));
+    CHECK(typed.isEmpty());
+    if (type) {
+        type->setCurrentIndex(type->findData(int(Transition::Type::Crossfade)));
+        emit type->activated(type->currentIndex()); // as a pick from the list
+    }
+    CHECK(typed.size() == 1 &&
+          typed.first().first().value<Transition::Type>() == Transition::Type::Crossfade);
+    panel->setNoTransition(QString());
+    CHECK(!duration->isEnabled() && !remove->isEnabled() && note->isHidden());
+    CHECK(type && !type->isEnabled());
+}
+
 int main(int argc, char **argv)
 {
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
@@ -487,6 +537,7 @@ int main(int argc, char **argv)
     testEasing(bar);
     testTitleTab(bar);
     testTrackStatus(bar);
+    testTransitionTab(bar);
     testProjectSettingsDialog();
 
     if (const QByteArray shot = qgetenv("ORBIS_SETTINGS_SHOT"); !shot.isEmpty()) {

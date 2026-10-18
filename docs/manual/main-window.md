@@ -46,9 +46,11 @@ follow a view, you set **reframe keyframes**, covered in
 ## The media sidebar
 
 The sidebar on the left of the viewport holds what you put on the
-timeline, on two tabs: **Media** (<img src="images/icons/tab-media.png" width="24" alt="">),
-the files you work with, and **Titles** (<img src="images/icons/tab-titles.png" width="24" alt="">),
-text to put over the video (see [Titles](titles.md)). The icons along its
+timeline, on three tabs: **Media** (<img src="images/icons/tab-media.png" width="24" alt="">),
+the files you work with, **Titles** (<img src="images/icons/tab-titles.png" width="24" alt="">),
+text to put over the video (see [Titles](titles.md)), and **Transitions**
+(<img src="images/icons/tab-transitions.png" width="24" alt="">), to go
+over from one clip to the next at a cut (see [Transitions](transitions.md)). The icons along its
 top pick the tab. The `<` button at its top-left closes the
 sidebar and leaves a slim strip at the window's edge; the `>` button on the
 strip opens it again. `Ctrl+B` does both. To make it wider or narrower,
@@ -188,8 +190,8 @@ doesn't fit to read all of it.
 ## The settings sidebar
 
 The sidebar on the right of the viewport holds the settings, sorted by
-subject into five tabs. The icons along its top pick the tab; hover over one
-to see its name. `Alt+1` to `Alt+5` pick the tabs from left to right; the
+subject into six tabs. The icons along its top pick the tab; hover over one
+to see its name. `Alt+1` to `Alt+6` pick the tabs from left to right; the
 key of the tab that's already showing closes the sidebar.
 
 | Tab | What it sets |
@@ -198,6 +200,7 @@ key of the tab that's already showing closes the sidebar.
 | <img src="images/icons/tab-audio.png" width="24" alt=""> **Audio** | A section per audio clip: the selected one, or all of a video or overlay clip's sound (*Camera mic*, *External mic*). Noise and wind reduction, its volume and its track's, fades. See [Audio and noise reduction](audio.md). |
 | <img src="images/icons/tab-overlay.png" width="24" alt=""> **Overlay** | Size, position and look of the selected picture-in-picture clip. |
 | <img src="images/icons/tab-title.png" width="24" alt=""> **Title** | The selected title's text, font and colour, and its position, size and timing. See [Titles](titles.md). |
+| <img src="images/icons/tab-transition.png" width="24" alt=""> **Transition** | The selected transition's length. See [Transitions](transitions.md). |
 | <img src="images/icons/tab-privacy.png" width="24" alt=""> **Privacy** | Blurring number plates. |
 
 Each tab is made of **sections**, such as **Stabilization** or **Colour**.

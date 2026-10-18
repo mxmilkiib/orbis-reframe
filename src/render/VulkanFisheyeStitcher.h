@@ -71,12 +71,13 @@ public:
 
     // Adopt FFmpeg's Vulkan device; builds the NV12/ycbcr pipeline; use with
     // stitchVk(). `queueFlags` is AVVulkanDeviceContext::queue_flags -- the
-    // flags FFmpeg created its queues with (PROTECTED on some FFmpeg/driver
-    // pairs; those queues need vkGetDeviceQueue2, vkGetDeviceQueue returns
-    // NULL for them). `frameFormat` is the VkFormat the decoder's frames will
-    // carry (e.g. VulkanVideoDecoder::frameFormat()); UNDEFINED means NV12.
-    // False (err set) if the device can't do ycbcr conversion or the NV12
-    // shader is missing -- caller should fall back to init()+stitch().
+    // flags FFmpeg created its queues with (INTERNALLY_SYNCHRONIZED on
+    // FFmpeg 9+ with drivers that offer it; those queues need
+    // vkGetDeviceQueue2, vkGetDeviceQueue returns NULL for them).
+    // `frameFormat` is the VkFormat the decoder's frames will carry (e.g.
+    // VulkanVideoDecoder::frameFormat()); UNDEFINED means NV12. False (err
+    // set) if the device can't do ycbcr conversion or the NV12 shader is
+    // missing -- caller should fall back to init()+stitch().
     bool initAdopt(VkInstance inst, VkPhysicalDevice phys, VkDevice dev,
                    uint32_t computeQueueFamily, VkDeviceQueueCreateFlags queueFlags,
                    VkFormat frameFormat, std::string& err);

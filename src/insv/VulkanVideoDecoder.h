@@ -81,9 +81,10 @@ public:
 
     // FFmpeg's Vulkan device, for the compute stitch to adopt. `queueFlags`
     // are the flags FFmpeg created its queues with
-    // (AVVulkanDeviceContext::queue_flags -- can be PROTECTED, which makes
-    // vkGetDeviceQueue return NULL; retrieve with vkGetDeviceQueue2).
-    // Valid after open().
+    // (AVVulkanDeviceContext::queue_flags, FFmpeg 9+: INTERNALLY_SYNCHRONIZED
+    // when the driver has VK_KHR_internally_synchronized_queues, which makes
+    // vkGetDeviceQueue return NULL; retrieve with vkGetDeviceQueue2). 0 on
+    // older FFmpeg. Valid after open().
     void deviceHandles(VkInstance& inst, VkPhysicalDevice& phys, VkDevice& dev,
                        uint32_t& computeQueueFamily, VkDeviceQueueCreateFlags& queueFlags) const;
 

@@ -116,6 +116,7 @@ void copyNv12(const uint8_t *pic, int w, int h, int rx, int ry, uint8_t *yPlane,
 
 struct InsetCompositor::State {
     std::unique_ptr<FlatVideoReader> reader;
+    std::unique_ptr<PictureSource> picture;
     bool failed = false;
     // The decoded frame graded (InsetClipJob::colorGrade), when it has one
     // (Nv12Converter::kPadding longer), and that as NV12 when it's copied.
@@ -206,6 +207,7 @@ bool InsetCompositor::layerAt(size_t i, int64_t timelineMs, bool nv12, Layer &la
     State &s = *m_states[i];
     if (timelineMs >= j.endMs()) {
         s.reader.reset(); // past it: free the decoder
+        s.picture.reset();
         return false;
     }
     if (timelineMs < j.startMs || s.failed)
@@ -213,12 +215,34 @@ bool InsetCompositor::layerAt(size_t i, int64_t timelineMs, bool nv12, Layer &la
     const int64_t localMs = timelineMs - j.startMs;
     const int64_t srcMs = j.trimInMs + static_cast<int64_t>(std::llround(localMs * j.speed));
     inset::Look look = j.lookAt ? j.lookAt(srcMs) : inset::Look{};
-    look.opacity *= inset::fadeGain(localMs, j.spanMs(), j.fadeInMs, j.fadeOutMs);
+    look.opacity *= inset::fadeGain(localMs, j.spanMs(), j.fadeInMs, j.fadeOutMs) *
+                    inset::rampGain(localMs, j.spanMs(), j.rampFrom, j.rampTo);
     const inset::Rect rect = inset::place(look, j.frame, j.aspect, m_outW, m_outH);
     if (rect.empty() || look.opacity <= 0.0f)
         return false;
     if (j.still) { // a title: blended, never copied
         layer = {j.still->data(), nullptr, j.stillW, j.stillH, rect, look.opacity, 0};
+        return true;
+    }
+    if (j.picture) { // a 360 clip's view, rendered at the rect's size
+        if (!s.picture) {
+            s.picture = j.picture();
+            if (!s.picture || !s.picture->open(err)) {
+                err = j.path + ": " + (err.empty() ? std::string("can't be read") : err);
+                s.picture.reset();
+                s.failed = true;
+                return false;
+            }
+        }
+        s.picture->setOutputSize(std::max(4, static_cast<int>(std::lround(rect.w)) & ~3),
+                                 std::max(2, static_cast<int>(std::lround(rect.h)) & ~1));
+        const VideoFrame *f = s.picture->frameAt(srcMs);
+        if (!f) {
+            if (!s.picture->lastError().empty())
+                err = j.path + ": " + s.picture->lastError();
+            return false;
+        }
+        layer = {f->rgba.data(), nullptr, f->width, f->height, rect, look.opacity, j.frame.borderRgb};
         return true;
     }
     if (!s.reader) {

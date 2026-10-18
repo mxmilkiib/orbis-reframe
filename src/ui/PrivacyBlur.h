@@ -42,8 +42,10 @@ public:
     // other than today's, so they may sit off the plates; empty when they
     // match. `name` = start with the clip's file name.
     QString staleness(const ClipItem &c, qint64 fromMs, qint64 toMs, bool name) const;
-    // The Privacy panel's status line for `c`: how much of it is scanned,
-    // and the plates blurred by hand.
+    // The Privacy panel's status line for `c`: how much of its source range
+    // [fromMs, toMs] (its trim, else) is scanned, and the plates blurred by
+    // hand.
+    QString status(const ClipItem &c, qint64 fromMs, qint64 toMs) const;
     QString status(const ClipItem &c) const;
 
     // What the picture shows at `dir` (sphere frame) in `c`'s frame at

@@ -630,6 +630,7 @@ Project::Project(QObject *parent)
     connect(m_timeline, &Timeline::clipSpeedChanged, this, edited);
     connect(m_timeline, &Timeline::clipStitchChanged, this, edited);
     connect(m_timeline, &Timeline::tracksChanged, this, edited);
+    connect(m_timeline, &Timeline::transitionsChanged, this, edited);
     // A measured sync or seam fine-tune is saved with the project but isn't
     // an edit: nothing to undo, and not an unsaved change.
     connect(m_timeline, &Timeline::clipSyncChanged, this, [this](int id) { onMeasured(id); });
@@ -924,6 +925,14 @@ QByteArray Project::buildDocument(const QDir *projectDir) const
                 {"lensGuard", c.seamAdjustGuard}};
     }
 
+    // Each at its cut: the index of the clip before it.
+    json transitions = json::array();
+    for (int i = 0; i + 1 < m_timeline->count(); ++i)
+        if (const Transition *t = m_timeline->transitionAfter(m_timeline->clipAt(i).id))
+            transitions.push_back({{"cut", i},
+                                   {"type", Transition::typeName(t->type)},
+                                   {"durationMs", static_cast<qint64>(t->durationMs)}});
+
     json tracks = json::array();
     bool anyTitle = false;
     for (int i = 0; i < m_timeline->trackCount(); ++i) {
@@ -992,7 +1001,8 @@ QByteArray Project::buildDocument(const QDir *projectDir) const
     }
     json doc = {
         {"format", kFormatTag},
-        {"version", anyTitle                ? kTitleFormatVersion
+        {"version", !transitions.empty()    ? kTransitionFormatVersion
+                    : anyTitle                ? kTitleFormatVersion
                     : anyFlat || mixedStitch ? kFlatClipFormatVersion
                                              : kPlainFormatVersion},
         {"previewStitch", previewStitchToJson(stitchForOlder)},
@@ -1001,6 +1011,8 @@ QByteArray Project::buildDocument(const QDir *projectDir) const
          {{"clips", std::move(clips)},
           {"tracks", std::move(tracks)}}},
     };
+    if (!transitions.empty())
+        doc["timeline"]["transitions"] = std::move(transitions);
     if (!media.empty())
         doc["media"] = std::move(media);
     return QByteArray::fromStdString(doc.dump());
@@ -1016,6 +1028,12 @@ bool Project::applyDocument(const QByteArray &text, const QDir *projectDir, QStr
     stitch::PreviewStitchConfig parsedStitch;
     OutputSettings parsedOutput;
     bool parsedMainMuted = false;
+    struct ParsedTransition {
+        int cut = 0; // index of the clip before it
+        Transition::Type type = Transition::Type::Crossfade;
+        qint64 durationMs = Transition::kDefaultMs;
+    };
+    std::vector<ParsedTransition> parsedTransitions;
     int parsedVersion = kFormatVersion;
     QList<MediaItem> parsedMedia;
     try {
@@ -1122,6 +1140,14 @@ bool Project::applyDocument(const QByteArray &text, const QDir *projectDir, QStr
         // the load.
         const json &jtl = doc.at("timeline");
         parsedMainMuted = jtl.value("mainMuted", false);
+        if (jtl.contains("transitions") && jtl.at("transitions").is_array())
+            for (const json &jt : jtl.at("transitions")) {
+                ParsedTransition pt;
+                pt.cut = jt.value("cut", -1);
+                pt.type = Transition::typeFromName(jt.value("type", std::string()).c_str());
+                pt.durationMs = jt.value("durationMs", Transition::kDefaultMs);
+                parsedTransitions.push_back(pt);
+            }
         if (jtl.contains("tracks") && jtl.at("tracks").is_array()) {
             for (const json &jt : jtl.at("tracks")) {
                 const std::string kind = jt.value("kind", std::string());
@@ -1230,6 +1256,9 @@ bool Project::applyDocument(const QByteArray &text, const QDir *projectDir, QStr
         m_timeline->setClipMediaMissing(id, pc.mediaMissing);
         clipIds.push_back(id);
     }
+    for (const ParsedTransition &pt : parsedTransitions) // (one past the last clip: refused)
+        if (pt.cut >= 0 && pt.cut < static_cast<int>(clipIds.size()))
+            m_timeline->setTransition(clipIds[pt.cut], pt.type, pt.durationMs);
     // Overlay clips before any audio, so sound linked to one finds its new
     // id; overlay audio tracks after their overlay tracks (one whose overlay
     // track is missing becomes a free audio track).

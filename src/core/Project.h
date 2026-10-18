@@ -90,6 +90,8 @@ public:
     //   A title (TrackClip::title): no source, sourceWidth or
     //   sourceHeight; title {text, font, bold, italic, color "#rrggbb"}
     //   instead, and its inset / key widths are the text size.
+    // "transitions" in "timeline": [{cut: the index of the clip before it,
+    //   type: "crossfade", durationMs}] (Transition), absent when none.
     // Version 8 (0.1.0) had one "stabilization" object at the top level for
     // the whole project instead of one per clip. Before version 10 a clip
     // played one of its audio streams itself (audioTrack, with audioGainDb,
@@ -99,8 +101,10 @@ public:
     // Version 11 added flat clips on the main track, and stitch settings
     // that differ between clips; a project with neither is still written as
     // version 10, so the builds before keep opening it. Version 12 added
-    // titles; a project without one is written as before.
-    static constexpr int kFormatVersion = 12;
+    // titles; a project without one is written as before. Version 13 added
+    // transitions, the same way.
+    static constexpr int kFormatVersion = 13;
+    static constexpr int kTransitionFormatVersion = 13;
     static constexpr int kTitleFormatVersion = 12;
     static constexpr int kFlatClipFormatVersion = 11;
     static constexpr int kPlainFormatVersion = 10;

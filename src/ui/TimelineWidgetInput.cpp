@@ -21,8 +21,9 @@
 #include <climits>
 #include <cmath>
 
-#include "../core/MediaPool.h" // media::extensions
-#include "../core/Title.h"     // title::kMimeType
+#include "../core/MediaPool.h"  // media::extensions
+#include "../core/Title.h"      // title::kMimeType
+#include "../core/Transition.h" // Transition::kMimeType
 
 // The timeline's input: files dropped on it, the mouse (select, seek, trim,
 // move, reorder, scrub, scroll near the edges), renaming a track, tooltips
@@ -55,13 +56,18 @@ void TimelineWidget::dragEnterEvent(QDragEnterEvent *e)
     const bool clip = !droppableFiles(e->mimeData(), DropKind::Clip).isEmpty();
     // A title, like an overlay video, but only over a timeline.
     const bool title = e->mimeData()->hasFormat(QString::fromLatin1(title::kMimeType));
-    if (title ? m_rows.isEmpty() : !clip && !video && (m_rows.isEmpty() || !audio)) {
+    // A transition: onto a cut, so two clips at least.
+    const bool transition = e->mimeData()->hasFormat(QString::fromLatin1(Transition::kMimeType));
+    if (transition ? m_rows.size() < 2
+        : title    ? m_rows.isEmpty()
+                   : !clip && !video && (m_rows.isEmpty() || !audio)) {
         e->ignore();
         return;
     }
     e->acceptProposedAction();
     m_dropActive = true;
-    m_dropTitle = title;
+    m_dropTransition = transition;
+    m_dropTitle = title && !transition;
     m_dropClip = clip && !title; // a mix goes by the clip rules, then the audio rules
     m_dropVideo = title || (video && !audio);
     dragMoveEvent(e);
@@ -85,7 +91,13 @@ void TimelineWidget::dropTo(QPoint pos)
     m_dropMain = m_dropVideo && !m_dropClip && !m_dropTitle &&
                  (m_rows.isEmpty() || (pos.y() >= mainTop() - kRowGap / 2 &&
                                        pos.y() < mainTop() + kMainH + kRowGap / 2));
-    if (m_dropClip || m_dropMain) {
+    if (m_dropTransition) {
+        // The cut nearest the pointer, between two clips.
+        m_dropTrack = -1;
+        m_dropIndex = std::clamp(insertIndexAt(timelineMsAt(pos.x())), 1,
+                                 std::max(1, int(m_rows.size()) - 1));
+        m_dropMs = m_dropIndex < m_rows.size() ? m_rows[m_dropIndex].startMs : m_totalMs;
+    } else if (m_dropClip || m_dropMain) {
         // Between clips, at the cut nearest the pointer.
         m_dropTrack = -1;
         m_dropIndex = insertIndexAt(timelineMsAt(pos.x()));
@@ -116,6 +128,15 @@ void TimelineWidget::dropEvent(QDropEvent *e)
     m_dropActive = false;
     m_autoScroll->stop();
     update();
+    if (active && m_dropTransition) {
+        if (m_dropIndex < 1 || m_dropIndex >= m_rows.size())
+            return;
+        e->acceptProposedAction();
+        emit transitionDropped(
+            m_rows[m_dropIndex - 1].clip.id,
+            QString::fromLatin1(e->mimeData()->data(QString::fromLatin1(Transition::kMimeType))));
+        return;
+    }
     if (active && m_dropTitle) {
         e->acceptProposedAction();
         const int trackId =
@@ -172,6 +193,9 @@ void TimelineWidget::mousePressEvent(QMouseEvent *e)
         m_drag = Drag::TrackMove; // a drag up / down reorders
         m_dragTrackIndex = h.track;
         m_trackGap = -1;
+        return;
+    case Hit::Transition:
+        emit transitionSelected(m_transitions[h.row].leftClipId);
         return;
     case Hit::MainClip: {
         m_dragRow = h.row;
@@ -238,6 +262,8 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *e)
                  (h.track < 0 ? hasOwnSound(-1)
                               : hasOwnSound(h.track) && foldBox(h.track).contains(e->pos())))
             shape = Qt::PointingHandCursor; // fold its sound tracks
+        else if (h.kind == Hit::Transition)
+            shape = Qt::PointingHandCursor;
         else if (h.kind == Hit::Header && h.track >= 0 &&
                  !muteBox(trackTop(h.track), kTrackH).contains(e->pos()))
             shape = Qt::OpenHandCursor; // drag to reorder, double-click to rename
@@ -276,7 +302,7 @@ QPoint TimelineWidget::edgeScrollStep(QPoint pos) const
     // track, a header drag, and a file drag that lands on a track. Not on a
     // press's jitter: a click near the bottom shouldn't scroll.
     const bool canChangeTrack = m_drag == Drag::AudioMove && !m_dragAudioOrig.moveTargets.isEmpty();
-    const bool vertical = m_dropActive ? !m_dropClip
+    const bool vertical = m_dropActive ? !m_dropClip && !m_dropTransition
                                        : m_dragMoved && (canChangeTrack || m_drag == Drag::TrackMove);
     const int top = kRulerH + kEdgeScrollBand, bottom = scrollBarTop() - kEdgeScrollBand;
     if (vertical && maxViewTop() > 0 && (pos.y() < top || pos.y() > bottom)) {
@@ -527,6 +553,8 @@ bool TimelineWidget::event(QEvent *e)
         else if (h.kind == Hit::Header && h.track >= 0 && m_tracks[h.track].video &&
                  !muteBox(trackTop(h.track), kTrackH).contains(he->pos()))
             QToolTip::showText(he->globalPos(), layerToolTip(h.track), this);
+        else if (h.kind == Hit::Transition)
+            QToolTip::showText(he->globalPos(), m_transitions[h.row].toolTip, this);
         else if (h.kind == Hit::MainClip && m_rows[h.row].clip.keySourceMs.isEmpty())
             QToolTip::showText(he->globalPos(),
                                tr("No reframe keyframes: this clip exports looking straight "
@@ -555,6 +583,16 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *e)
     const Hit h = hitTest(e->pos());
     QMenu menu(this);
     const qint64 atMs = timelineMsAt(e->pos().x());
+
+    if (h.kind == Hit::Transition) {
+        const int leftClipId = m_transitions[h.row].leftClipId;
+        emit transitionSelected(leftClipId);
+        QAction *remove = menu.addAction(tr("Remove transition"));
+        remove->setObjectName(QStringLiteral("transitionRemoveAction"));
+        if (menu.exec(e->globalPos()) == remove)
+            emit transitionRemoveRequested(leftClipId);
+        return;
+    }
 
     if (h.kind == Hit::MainClip) {
         emit clipSelected(m_rows[h.row].clip.id);

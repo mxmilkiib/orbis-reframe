@@ -17,7 +17,8 @@ class QTimer;
 #include <vector>
 
 // The timeline: a ruler, the main video track (clip blocks sized by timeline
-// span, butt-joined -- hard cuts; picture only) and the extra tracks below it
+// span, butt-joined; picture only; a transition shows as a box over its
+// cut, as long as it plays) and the extra tracks below it
 // in three groups, a little apart: its own sound (the stream tracks), the
 // Audio group, and the overlay (video) tracks, each followed by its sound
 // track. Each row has a header on the left; a playhead runs over all of them.
@@ -80,6 +81,10 @@ class QTimer;
 //   nearest the pointer, also on an empty timeline -> clipFilesDropped.
 //   Titles: dragged from the Titles tab, onto an overlay track like a video
 //   file -> titleDropped (not on an empty timeline).
+//   Transitions: dragged from the Transitions tab onto the main track, at
+//   the cut nearest the pointer -> transitionDropped (with two clips or
+//   more). A transition's box: click -> transitionSelected; right-click ->
+//   remove it; its tooltip says what it is.
 //   Waveforms: a clip given `peaks` draws its audio's level (dB scale), with
 //   its gain and fades applied.
 //   Reframe keys: a main-track clip's keys show as diamonds along its bottom;
@@ -158,7 +163,17 @@ public:
         QVector<TrackClipView> clips;
     };
 
+    // A transition at a cut (Transition.h).
+    struct TransitionView {
+        int leftClipId = 0;    // at the cut after this clip
+        qint64 durationMs = 0; // what plays (Timeline::transitionSpan); 0 = it can't
+        bool dip = false;      // a dip to black, else a crossfade
+        QString toolTip;       // what it is, and why it's shorter than set
+    };
+
     void setClips(const QVector<Clip> &clips);
+    void setTransitions(const QVector<TransitionView> &transitions);
+    void setSelectedTransition(int leftClipId); // 0 = none; does not emit
     // Top to bottom, group by group (TrackView::Group).
     void setTracks(const QVector<TrackView> &tracks);
     void setPlayhead(qint64 timelineMs);
@@ -201,6 +216,11 @@ signals:
     // position `index`, in order.
     void clipFilesDropped(const QStringList &paths, int index);
     void clipSelected(int clipId); // a video clip clicked; 0 = a click on empty space
+    void transitionSelected(int leftClipId); // a transition's box clicked
+    void transitionRemoveRequested(int leftClipId);
+    // A transition dragged from the Transitions tab (Transition::kMimeType;
+    // `type` its data) onto the cut after clip `leftClipId`.
+    void transitionDropped(int leftClipId, const QString &type);
 
     void trackClipSelected(int clipId); // -1 = selection cleared
     void trackClipMoved(int clipId, int toTrackId, qint64 startMs);
@@ -254,8 +274,8 @@ private:
         QRect rect;
     };
     struct Hit { // what's under a point
-        enum Kind { None, Ruler, Header, MainClip, MainEmpty, TrackClip, TrackEmpty } kind = None;
-        int row = -1;   // main: index into m_rows
+        enum Kind { None, Ruler, Header, MainClip, MainEmpty, TrackClip, TrackEmpty, Transition } kind = None;
+        int row = -1;   // main: index into m_rows; a transition: into m_transitions
         int track = -1; // audio: index into m_tracks
         int clip = -1;  // audio: index into that track's clips
     };
@@ -281,6 +301,8 @@ private:
     Hit hitTest(QPoint pos) const;
     // Main-track insert position for a clip added at `ms`: the cut nearest to it.
     int insertIndexAt(qint64 ms) const;
+    // Transition `index`'s box over its cut; null if its clip isn't laid out.
+    QRect transitionRect(int index) const;
     int trackTop(int trackIndex) const; // y of an extra track's row
     QRect trackClipRect(int trackIndex, const TrackClipView &c) const;
     int trackAtY(int y) const; // index, or -1
@@ -334,6 +356,8 @@ private:
 
     QVector<Clip> m_clips;
     QVector<Row> m_rows;
+    QVector<TransitionView> m_transitions;
+    int m_selectedTransition = 0; // its leftClipId
     QVector<TrackView> m_tracks;
     QVector<int> m_trackY;  // each track's row, y under the main track's top
     QVector<bool> m_shown;  // ... not folded away
@@ -384,6 +408,7 @@ private:
     bool m_dropVideo = false; // the drag carries video files (else audio)
     bool m_dropClip = false;  // ... .insv clips, for the main track
     bool m_dropTitle = false; // ... a title, for an overlay track
+    bool m_dropTransition = false; // ... a transition, for a cut (m_dropIndex: the clip after it)
     bool m_dropMain = false;  // the video files go on the main track (pointer over it, or no clips yet)
     int m_dropIndex = 0;      // the main-track position they'd go in at
     qint64 m_dropMs = 0;

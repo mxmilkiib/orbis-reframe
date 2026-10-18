@@ -189,20 +189,25 @@ QString PrivacyBlur::staleness(const ClipItem &c, qint64 fromMs, qint64 toMs, bo
 
 QString PrivacyBlur::status(const ClipItem &c) const
 {
+    return status(c, c.trimInMs, c.trimOutMs);
+}
+
+QString PrivacyBlur::status(const ClipItem &c, qint64 fromMs, qint64 toMs) const
+{
     const PlateScanCache::Scan scan = scanOf(c);
-    const bool covered = scan && scan->covers(c.trimInMs, c.trimOutMs);
+    const bool covered = scan && scan->covers(fromMs, toMs);
     QString status;
     if (covered) {
         int frames = 0, withPlates = 0;
         for (const privacy::ScanFrame &f : scan->frames)
-            if (f.tMs >= c.trimInMs && f.tMs < c.trimOutMs) {
+            if (f.tMs >= fromMs && f.tMs < toMs) {
                 ++frames;
                 withPlates += f.regions.empty() ? 0 : 1;
             }
         status = withPlates ? tr("Scanned: plates on %1 of %2 frames.").arg(withPlates).arg(frames)
                             : tr("Scanned: no plates found.");
-    } else if (scan && std::any_of(scan->spans.begin(), scan->spans.end(), [&c](const auto &s) {
-                   return s.toMs >= c.trimInMs && s.fromMs <= c.trimOutMs;
+    } else if (scan && std::any_of(scan->spans.begin(), scan->spans.end(), [&](const auto &s) {
+                   return s.toMs >= fromMs && s.fromMs <= toMs;
                })) {
         status = tr("Partly scanned. Scan the clip to cover all of it.");
     } else {

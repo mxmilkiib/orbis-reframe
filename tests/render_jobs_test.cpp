@@ -1,7 +1,8 @@
 // src/ui/RenderJobs: the edit model as playback, the export and a
 // screenshot are handed it -- the audio mix, the overlays (what's left out,
-// in which order), titles, a main-track clip's export job, and the suggested
-// file names. No GPU, no media.
+// in which order), titles, transitions (their layers and crossfading
+// sound), a main-track clip's export job, and the suggested file names. No
+// GPU, no media.
 
 #include "RenderJobs.h"
 
@@ -76,8 +77,9 @@ void testOverlays()
     keyed.centerX = 0.25f;
     t.upsertTrackClipInsetKey(c2, 1000, keyed);
 
-    const std::vector<InsetFeed::Clip> feed = renderjobs::insetFeed(t, 1920, 1080);
-    const std::vector<exportpipe::InsetClipJob> jobs = renderjobs::insetJobs(t, 1920, 1080);
+    const PrivacyBlur privacy;
+    const std::vector<InsetFeed::Clip> feed = renderjobs::insetFeed(t, 1920, 1080, privacy);
+    const std::vector<exportpipe::InsetClipJob> jobs = renderjobs::insetJobs(t, 1920, 1080, privacy);
     CHECK(feed.size() == 2 && jobs.size() == 2);
     if (feed.size() != 2 || jobs.size() != 2)
         return;
@@ -110,8 +112,9 @@ void testTitles()
     blank.text = "  ";
     t.addTitleClip(v, 8000, blank);
 
-    const std::vector<InsetFeed::Clip> feed = renderjobs::insetFeed(t, 1920, 1080);
-    const std::vector<exportpipe::InsetClipJob> jobs = renderjobs::insetJobs(t, 1920, 1080);
+    const PrivacyBlur privacy;
+    const std::vector<InsetFeed::Clip> feed = renderjobs::insetFeed(t, 1920, 1080, privacy);
+    const std::vector<exportpipe::InsetClipJob> jobs = renderjobs::insetJobs(t, 1920, 1080, privacy);
     CHECK(feed.size() == 1 && jobs.size() == 1);
     if (feed.size() != 1 || jobs.size() != 1)
         return;
@@ -134,6 +137,186 @@ void testTitles()
     // Playback's picture is smaller or the same, placed the same.
     CHECK(near(double(f.stillW) / f.stillH, j.aspect, 0.05));
     CHECK(near(l.width, f.look.width * f.stillWidthPerSize, 0.01));
+}
+
+// A transition: the other clip as a layer over each half, blending through
+// the cut; the clips' own sound running on past it, crossfading.
+void testTransitions()
+{
+    Timeline t;
+    const int a = t.appendClip("/c/a.insv", 20000, 30.0, 7680, 3840, 1);
+    const int b = t.appendClip("/c/b.insv", 20000, 30.0, 7680, 3840, 1);
+    const int c = t.appendClip("/c/c.mp4", 20000, 30.0, 1920, 1080, 0, true);
+    t.setClipTrimIn(a, 2000);
+    t.setClipTrimOut(a, 10000); // 8 s
+    t.setClipTrimIn(b, 3000);
+    t.setClipTrimOut(b, 13000);
+    t.setClipSpeed(b, 2.0); // 5 s
+    t.setClipTrimIn(c, 4000);
+    t.setTransition(a, Transition::Type::Crossfade, 1000); // the cut at 8 s
+    t.setTransition(b, Transition::Type::Crossfade, 2000); // the cut at 13 s
+
+    const std::vector<renderjobs::TransitionLayer> layers = renderjobs::transitionLayers(t);
+    CHECK(layers.size() == 4);
+    if (layers.size() != 4)
+        return;
+    // a | b: b from before its trim-in (at double speed), blending in to
+    // half; then a past its trim-out, blending out from half.
+    const renderjobs::TransitionLayer &in = layers[0], &out = layers[1];
+    CHECK(in.clipIndex == 1 && in.startMs == 7500 && in.trimInMs == 2000 && in.trimOutMs == 3000);
+    CHECK(in.rampFrom == 0.0f && in.rampTo == 0.5f);
+    CHECK(out.clipIndex == 0 && out.startMs == 8000 && out.trimInMs == 10000 &&
+          out.trimOutMs == 10500);
+    CHECK(out.rampFrom == 0.5f && out.rampTo == 0.0f);
+    CHECK(in.id < 0 && out.id < 0 && in.id != out.id && layers[2].id != in.id);
+    CHECK(in.overClipId == a && out.overClipId == b); // each over the other clip
+    CHECK(layers[2].clipIndex == 2 && layers[2].startMs == 12000 && layers[3].clipIndex == 1);
+
+    const PrivacyBlur privacy;
+    const std::vector<InsetFeed::Clip> feed = renderjobs::insetFeed(t, 1920, 1080, privacy);
+    const std::vector<exportpipe::InsetClipJob> jobs = renderjobs::insetJobs(t, 1920, 1080, privacy);
+    // The flat clip's own layer, then the four transition layers.
+    CHECK(feed.size() == 5 && jobs.size() == 5);
+    if (feed.size() != 5 || jobs.size() != 5)
+        return;
+    CHECK(feed[0].id == c && !feed[0].picture);
+    const InsetFeed::Clip &f = feed[1];
+    CHECK(f.id == in.id && f.fullFrame && f.picture && !f.pictureKey.isEmpty());
+    CHECK(f.startMs == 7500 && f.trimInMs == 2000 && f.speed == 2.0 && f.spanMs() == 500);
+    CHECK(near(f.aspect, 1920.0 / 1080.0) && near(f.look.width, 1.0));
+    CHECK(f.rampFrom == 0.0f && f.rampTo == 0.5f);
+    CHECK(jobs[1].picture && jobs[1].rampTo == 0.5f && jobs[1].startMs == 7500);
+    // b | c: the flat clip blends in as its file's frames.
+    CHECK(feed[3].path == "/c/c.mp4" && !feed[3].picture && feed[3].trimInMs == 3000);
+    // A new setting of the clip it shows: a new picture.
+    const QString key = f.pictureKey;
+    ColorGrade g;
+    g.exposureEv = 0.5f;
+    t.setClipColor(b, g);
+    CHECK(renderjobs::insetFeed(t, 1920, 1080, privacy)[1].pictureKey != key);
+
+    // The sound: a's runs half the transition past the cut and fades out
+    // over all of it, b's starts half of it early and fades in.
+    std::vector<insv::MixClip> mix = renderjobs::mixClips(t);
+    const auto clipOf = [&](const char *path) -> const insv::MixClip * {
+        for (const insv::MixClip &m : mix)
+            if (m.path == path)
+                return &m;
+        return nullptr;
+    };
+    const insv::MixClip *ma = clipOf("/c/a.insv");
+    const insv::MixClip *mb = clipOf("/c/b.insv");
+    CHECK(ma && mb);
+    if (!ma || !mb)
+        return;
+    CHECK(ma->startFrame == 0 && ma->lengthFrames == 8500 * 48 && ma->fadeOutFrames == 1000 * 48);
+    CHECK(ma->fadeInFrames == 0);
+    CHECK(mb->startFrame == 7500 * 48 && mb->inFrame == 2000 * 48 && mb->fadeInFrames == 1000 * 48);
+    // ... and at its own end into c (a 2 s transition).
+    CHECK(mb->lengthFrames == (500 + 5000 + 1000) * 48 && mb->fadeOutFrames == 2000 * 48);
+
+    // One that can't play (no footage before c's start) has no layers.
+    t.setClipTrimIn(c, 0);
+    CHECK(renderjobs::transitionLayers(t).size() == 2);
+    mix = renderjobs::mixClips(t);
+    mb = clipOf("/c/b.insv");
+    CHECK(mb && mb->fadeOutFrames == 0);
+
+    // A dip to black (b | c still can't play): black over a | b, in up to
+    // the cut and out after it; the sound fades out and in, no longer.
+    t.setTransition(a, Transition::Type::DipToBlack, 1000);
+    const std::vector<renderjobs::TransitionLayer> dip = renderjobs::transitionLayers(t);
+    CHECK(dip.size() == 2);
+    if (dip.size() != 2)
+        return;
+    CHECK(dip[0].clipIndex == -1 && dip[0].startMs == 7500 &&
+          dip[0].trimOutMs - dip[0].trimInMs == 500);
+    CHECK(dip[0].rampFrom == 0.0f && dip[0].rampTo == 1.0f);
+    CHECK(dip[0].overClipId == a && dip[1].overClipId == b);
+    CHECK(dip[1].clipIndex == -1 && dip[1].startMs == 8000 && dip[1].rampFrom == 1.0f &&
+          dip[1].rampTo == 0.0f);
+    const std::vector<InsetFeed::Clip> dipFeed = renderjobs::insetFeed(t, 1920, 1080, privacy);
+    const std::vector<exportpipe::InsetClipJob> dipJobs =
+        renderjobs::insetJobs(t, 1920, 1080, privacy);
+    CHECK(dipFeed.size() == 3 && dipJobs.size() == 3);
+    if (dipFeed.size() != 3 || dipJobs.size() != 3)
+        return;
+    const InsetFeed::Clip &black = dipFeed[1];
+    CHECK(black.id == dip[0].id && black.still && black.fullFrame && black.speed == 1.0);
+    CHECK(black.spanMs() == 500 && black.rampTo == 1.0f && near(black.look.width, 1.0));
+    CHECK(black.stillW > 0 && black.still->size() == size_t(black.stillW * black.stillH * 4));
+    CHECK(black.still->at(0) == 0 && black.still->at(3) == 255); // opaque black
+    CHECK(dipJobs[1].still == black.still && dipJobs[1].rampTo == 1.0f &&
+          dipJobs[1].startMs == 7500);
+    mix = renderjobs::mixClips(t);
+    ma = clipOf("/c/a.insv");
+    mb = clipOf("/c/b.insv");
+    CHECK(ma && ma->lengthFrames == 8000 * 48 && ma->fadeOutFrames == 500 * 48);
+    CHECK(mb && mb->startFrame == 8000 * 48 && mb->inFrame == 3000 * 48 &&
+          mb->fadeInFrames == 500 * 48);
+}
+
+// Playback draws a transition's layer only over the main-track clip it
+// blends with, and a little past its span: the main picture may lag the
+// clock at the cut, and the layer goes with the picture, not the clock.
+void testLayerOverMainClip()
+{
+    Timeline t;
+    const int a = t.appendClip("/c/a.insv", 20000, 30.0, 7680, 3840, 1);
+    const int b = t.appendClip("/c/b.insv", 20000, 30.0, 7680, 3840, 1);
+    t.setClipTrimOut(a, 8000);
+    t.setTransition(a, Transition::Type::DipToBlack, 1000); // black 7.5-8 s over a, 8-8.5 s over b
+    InsetFeed feed;
+    feed.setClips(renderjobs::insetFeed(t, 1920, 1080, PrivacyBlur()));
+    const auto drawn = [&](qint64 ms, int mainClipId) {
+        return feed.frameFor(ms, false, mainClipId);
+    };
+    CHECK(drawn(7600, a).size() == 1);
+    CHECK(drawn(7600, b).empty() && drawn(7600, 0).empty());
+    // Just past the cut, the main track still showing a: still a's layer,
+    // at its end (all black).
+    const std::vector<EquirectViewportWindow::InsetDraw> late = drawn(8010, a);
+    CHECK(late.size() == 1 && late[0].look.opacity > 0.99f && late[0].locked);
+    // b on screen: the layer going out over it.
+    const std::vector<EquirectViewportWindow::InsetDraw> over = drawn(8010, b);
+    CHECK(over.size() == 1 && over[0].look.opacity > 0.9f);
+    CHECK(over.size() == 1 && late.size() == 1 && over[0].clipId != late[0].clipId);
+    // b showing a frame early: already b's layer, at its start.
+    CHECK(drawn(7990, b).size() == 1);
+    // Well outside: none.
+    CHECK(drawn(7000, a).empty() && drawn(9000, b).empty());
+}
+
+void testMissingSources()
+{
+    Timeline t;
+    t.appendClip("/c/here.insv", 20000, 30.0);
+    t.appendClip("/c/gone.insv", 20000, 30.0);
+    t.appendClip("/c/gone.insv", 20000, 30.0); // the same file twice: listed once
+    const int music = t.addTrack(Track::Kind::Audio, "Music");
+    const int mutedTrack = t.addTrack(Track::Kind::Audio, "Muted");
+    t.setTrackAudio(mutedTrack, 0.0, true);
+    t.addAudioClip(music, "/m/song.wav", 5000, 0);
+    const int quiet = t.addAudioClip(music, "/m/quiet.wav", 5000, 6000);
+    t.setAudioClipLevel(quiet, 0.0, true);
+    t.addAudioClip(mutedTrack, "/m/off.wav", 5000, 0);
+    const int v1 = t.addTrack(Track::Kind::Video, "V1");
+    const int hidden = t.addTrack(Track::Kind::Video, "Hidden");
+    t.setTrackAudio(hidden, 0.0, true);
+    t.addVideoClip(v1, "/v/inset.mp4", 4000, 0, 1920, 1080);
+    t.addVideoClip(hidden, "/v/hidden.mp4", 4000, 0, 1920, 1080);
+
+    CHECK(renderjobs::missingSources(t).isEmpty());
+
+    t.setSourcesMissing({{"/c/gone.insv", true},
+                         {"/m/song.wav", true},
+                         {"/m/quiet.wav", true},
+                         {"/m/off.wav", true},
+                         {"/v/inset.mp4", true},
+                         {"/v/hidden.mp4", true}});
+    // Muted clip, muted track and hidden track aren't exported: not listed.
+    CHECK((renderjobs::missingSources(t) ==
+           QStringList{"/c/gone.insv", "/m/song.wav", "/v/inset.mp4"}));
 }
 
 void testClipJob(const QString &dir)
@@ -204,8 +387,11 @@ int main(int argc, char **argv)
     QTemporaryDir tmp;
     CHECK(tmp.isValid());
     testMix();
+    testMissingSources();
     testOverlays();
     testTitles();
+    testTransitions();
+    testLayerOverMainClip();
     testClipJob(tmp.path());
     testSuggestedPaths(tmp.path());
     if (g_failures == 0)

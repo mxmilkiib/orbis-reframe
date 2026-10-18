@@ -729,6 +729,68 @@ void testFlatMainClip(const Ctx &c)
     settle();
 }
 
+// The Transitions tab's "Add at the nearest cut": a crossfade at the cut
+// nearest the playhead, selected, the Transition tab showing it -- why it
+// doesn't play with no footage past the trims, its duration edited there;
+// Delete removes it, undo puts it back, a click on a clip deselects it.
+void testTransition(const Ctx &c)
+{
+    QAction *undo = action(c, "undoAction");
+    CHECK(find<QWidget>(c.w, "transitionsPanel") && c.timeline->count() == 2);
+    if (!undo || c.timeline->count() != 2)
+        return;
+    settle();
+    CHECK(seekTo(c, kClipMs - 300));
+    trigger(c, "transitionAddAction");
+    const int left = c.timeline->clipAt(0).id;
+    const Transition *t = c.timeline->transitionAfter(left);
+    CHECK(t && t->durationMs == Transition::kDefaultMs && c.timeline->transitions().size() == 1);
+    auto *sidebar = c.w->findChild<SettingsSidebar *>();
+    CHECK(sidebar && sidebar->currentIndex() == SettingsSidebar::TransitionTab);
+    auto *duration = find<QDoubleSpinBox>(c.w, "transitionDuration");
+    auto *note = find<QLabel>(c.w, "transitionNote");
+    CHECK(duration && duration->isEnabled() && std::abs(duration->value() - 1.0) < 1e-6);
+    // Untrimmed clips: no footage past the cut, so it doesn't play.
+    CHECK(note && note->isVisibleTo(c.w) && note->text().startsWith(QStringLiteral("Doesn't play")));
+    // With room past the trims, it plays in full.
+    settle();
+    c.timeline->setClipTrimOut(left, kClipMs - 1000);
+    c.timeline->setClipTrimIn(c.timeline->clipAt(1).id, 1000);
+    CHECK(note && !note->isVisibleTo(c.w));
+    settle();
+    if (duration)
+        duration->setValue(1.5);
+    t = c.timeline->transitionAfter(left);
+    CHECK(t && t->durationMs == 1500);
+    CHECK(c.timeline->transitionSpan(*t).durationMs == 1500);
+    // A dip to black put on the same cut replaces it, keeping its length.
+    emit c.timelineWidget->transitionDropped(left, QStringLiteral("dipToBlack"));
+    t = c.timeline->transitionAfter(left);
+    CHECK(t && t->type == Transition::Type::DipToBlack && t->durationMs == 1500);
+    CHECK(c.timeline->transitions().size() == 1);
+
+    settle();
+    key(c, Qt::Key_Delete); // the selected transition, not a clip or key
+    CHECK(c.timeline->transitions().isEmpty() && c.timeline->count() == 2);
+    CHECK(duration && !duration->isEnabled());
+    undo->trigger();
+    CHECK(c.timeline->transitions().size() == 1);
+    // Clicking a clip selects it instead.
+    const int leftNow = c.timeline->clipAt(0).id; // undo gave the clips new ids
+    emit c.timelineWidget->transitionSelected(leftNow);
+    CHECK(duration && duration->isEnabled());
+    emit c.timelineWidget->clipSelected(c.timeline->clipAt(1).id);
+    CHECK(duration && !duration->isEnabled());
+    key(c, Qt::Key_Escape);
+
+    // Back as it was: no transition, the clips untrimmed.
+    settle();
+    c.timeline->removeTransition(leftNow);
+    c.timeline->clearClipTrim(c.timeline->clipAt(0).id);
+    c.timeline->clearClipTrim(c.timeline->clipAt(1).id);
+    settle();
+}
+
 // The Titles tab's "Add to timeline": a title at the playhead, selected, the
 // Title tab showing its text; typing there edits it (the K shortcut
 // doesn't set a key), the picture reaches the viewport, and Duration sets
@@ -1161,6 +1223,7 @@ int main(int argc, char **argv)
             testOverlayLayers(c);
             testFlatMainClip(c);
             testTitle(c);
+            testTransition(c);
             testFullScreen(c);
             testTrackSubjectMode(c);
             testViewMenu(c);

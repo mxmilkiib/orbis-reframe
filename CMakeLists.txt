@@ -103,6 +103,21 @@ if(NOT OpenCV_FOUND)
     message(STATUS "OpenCV not found (sudo apt install libopencv-dev)"
         " -- skipping insv_optical and tools/residual_stab")
 endif()
+# OpenCV 5 moved what we use out of two modules: goodFeaturesToTrack from
+# imgproc into `features`, findHomography / estimateAffinePartial2D from
+# calib3d into `geometry`.
+if(OpenCV_FOUND AND OpenCV_VERSION VERSION_GREATER_EQUAL 5)
+    if(NOT TARGET opencv_features)
+        message(STATUS "OpenCV ${OpenCV_VERSION} without its features module"
+            " -- skipping everything that needs OpenCV")
+        set(OpenCV_FOUND FALSE)
+    endif()
+    set(ORBIS_OPENCV_FEATURES opencv_features)
+    set(ORBIS_OPENCV_GEOMETRY opencv_geometry)
+else()
+    set(ORBIS_OPENCV_FEATURES "")
+    set(ORBIS_OPENCV_GEOMETRY opencv_calib3d)
+endif()
 
 # --- src/insv: .insv trailer parser (calibration + IMU/exposure telemetry), no
 # FFmpeg/Qt dependency — see src/insv/InsvTrailer.h. Its own tiny lib
@@ -199,6 +214,7 @@ add_library(orbis_core STATIC
     src/core/ReframeTrack.cpp
     src/core/ReframeTrack.h
     src/core/Title.h
+    src/core/Transition.h
 )
 set_target_properties(orbis_core PROPERTIES AUTOMOC ON)
 target_include_directories(orbis_core PUBLIC src/core src/stitch src/privacy)
@@ -321,7 +337,8 @@ if(OpenCV_FOUND)
         src/insv/SyncEstimator.cpp
     )
     target_include_directories(insv_optical PUBLIC src/insv PRIVATE ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(insv_optical PUBLIC insv PRIVATE opencv_core opencv_imgproc opencv_video)
+    target_link_libraries(insv_optical PUBLIC insv
+        PRIVATE opencv_core opencv_imgproc opencv_video ${ORBIS_OPENCV_FEATURES})
 endif()
 
 if(FFMPEG_FOUND)
@@ -373,6 +390,7 @@ if(FFMPEG_FOUND)
         src/export/FlatVideoReader.cpp
         src/export/InsetCompositor.h
         src/export/InsetCompositor.cpp
+        src/export/PictureSource.h
     )
     # src/core for the Qt-free InsetGeometry.h (the shared inset placement).
     target_include_directories(reframe_flatten PUBLIC src/export src/core)
@@ -382,6 +400,7 @@ if(FFMPEG_FOUND)
     # tests/main_window_test, which builds a MainWindow without a GPU.
     add_library(orbis_app STATIC
         src/ui/MainWindow.cpp
+        src/ui/MainWindowTransitions.cpp
         src/ui/MainWindow.h
         src/ui/ClipBackend.cpp
         src/ui/ClipBackend.h
@@ -393,6 +412,8 @@ if(FFMPEG_FOUND)
         src/ui/SmokeTest.h
         src/ui/StabilizerCache.cpp
         src/ui/StabilizerCache.h
+        src/ui/FrameViewCache.cpp
+        src/ui/FrameViewCache.h
         src/ui/PlaybackController.cpp
         src/ui/PlaybackController.h
         src/ui/PlaybackControllerDecoder.cpp
@@ -404,6 +425,10 @@ if(FFMPEG_FOUND)
         src/ui/TitleRender.h
         src/ui/TitlesPanel.cpp
         src/ui/TitlesPanel.h
+        src/ui/TransitionsPanel.cpp
+        src/ui/TransitionsPanel.h
+        src/ui/ClipViewSource.cpp
+        src/ui/ClipViewSource.h
         src/ui/EditToolbar.cpp
         src/ui/EditToolbar.h
         src/ui/PlayerBar.cpp
@@ -454,6 +479,8 @@ if(FFMPEG_FOUND)
         src/ui/panels/OverlayPanel.h
         src/ui/panels/TitleTextPanel.cpp
         src/ui/panels/TitleTextPanel.h
+        src/ui/panels/TransitionPanel.cpp
+        src/ui/panels/TransitionPanel.h
         src/ui/panels/PrivacyPanel.cpp
         src/ui/panels/PrivacyPanel.h
         src/ui/PlateScanCache.cpp
@@ -581,14 +608,15 @@ if(FFMPEG_FOUND)
         else()
             find_package(ncnn CONFIG QUIET)
         endif()
-        if(ncnn_FOUND AND TARGET opencv_calib3d AND TARGET opencv_video)
+        if(ncnn_FOUND AND TARGET ${ORBIS_OPENCV_GEOMETRY} AND TARGET opencv_video)
             add_library(privacy_scan STATIC
                 src/privacy/PlateScanner.h src/privacy/PlateScanner.cpp
                 src/privacy/PlateTracking.h src/privacy/PlateTracking.cpp
                 src/privacy/StitchFrameSource.h src/privacy/StitchFrameSource.cpp)
             target_include_directories(privacy_scan PUBLIC src/privacy PRIVATE ${OpenCV_INCLUDE_DIRS})
             target_link_libraries(privacy_scan PUBLIC privacy_data stitch
-                PRIVATE orbis_paths ncnn opencv_core opencv_imgproc opencv_video opencv_calib3d)
+                PRIVATE orbis_paths ncnn opencv_core opencv_imgproc opencv_video
+                ${ORBIS_OPENCV_FEATURES} ${ORBIS_OPENCV_GEOMETRY})
 
 
             # tools/plate_scan: the scan from the command line, plus stills of
@@ -808,6 +836,7 @@ if(TARGET insv_demux AND Qt6Test_FOUND)
         src/ui/panels/ColourPanel.cpp src/ui/panels/ColourPanel.h
         src/ui/panels/OverlayPanel.cpp src/ui/panels/OverlayPanel.h
         src/ui/panels/TitleTextPanel.cpp src/ui/panels/TitleTextPanel.h
+        src/ui/panels/TransitionPanel.cpp src/ui/panels/TransitionPanel.h
         src/ui/panels/PrivacyPanel.cpp src/ui/panels/PrivacyPanel.h
         src/ui/panels/MediaInfoPanel.cpp src/ui/panels/MediaInfoPanel.h
         src/ui/ProjectSettingsDialog.cpp src/ui/ProjectSettingsDialog.h

@@ -26,7 +26,7 @@ shortcuts.
 | `[` / `]` | Trim: make the clip start / end at the playhead. Works on the selected audio or overlay clip, otherwise on the video clip. |
 | `R` | Restore: give the clip back its full length. Works on the selected audio or overlay clip, otherwise on the video clip. |
 | `S` | Split at the playhead: the selected audio or overlay clip, otherwise the video clip. |
-| `Delete` or `Backspace` | Delete the selected clip. With no clip selected: delete the reframe keyframe at the playhead. |
+| `Delete` or `Backspace` | Delete the selected clip or transition. With nothing selected: delete the reframe keyframe at the playhead. |
 | `Esc` | Clear the selection. While drawing a box for Track subject or Blur a plate: cancel it. In full screen: leave full screen. |
 | `Ctrl+Z` | Undo. |
 | `Ctrl+Shift+Z` | Redo. |
@@ -61,7 +61,7 @@ shortcuts.
 |---|---|
 | `Ctrl+B` | Close or open the left sidebar (**Media**). |
 | `Ctrl+Shift+B` | Close or open the right sidebar (the settings). |
-| `Alt+1` … `Alt+5` | Show a tab of the settings sidebar, from left to right: Video, Audio, Overlay, Title, Privacy (opening the sidebar if it's closed). The key of the tab already showing closes the sidebar. |
+| `Alt+1` … `Alt+6` | Show a tab of the settings sidebar, from left to right: Video, Audio, Overlay, Title, Transition, Privacy (opening the sidebar if it's closed). The key of the tab already showing closes the sidebar. |
 
 In the **Media** tab: `Enter` (or a double-click) puts the selected files on
 the timeline, `Delete` removes them from the project's media (the files
@@ -123,6 +123,8 @@ file, `Alt+S` saves (`Enter` does too).
 | Mouse wheel over the track names, or `Shift` + mouse wheel | Scroll the tracks up / down, when they don't all fit. |
 | Drop files from the file manager | Add `.insv` clips at the nearest cut, flat videos too when dropped on the video track, or audio files and flat video overlays where you drop them (those need a clip on the video track first). |
 | Drop a title from the **Titles** tab | Add a title where you drop it, on an overlay track (needs a clip on the video track first). |
+| Drop a transition from the **Transitions** tab | Put it on the cut nearest where you drop it (needs two clips on the video track). |
+| Click a transition's box | Select it. Right-click: remove it. |
 
 ## When typing in a field
 

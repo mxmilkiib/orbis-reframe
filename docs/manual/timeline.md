@@ -66,7 +66,9 @@ timeline taller, drag the line between it and the viewport up.
 The video track holds your clips, one after another, with a hard cut
 from each clip to the next: 360° `.insv` clips, and flat videos from a
 phone or an action camera if you like ([below](#flat-videos-on-the-video-track)). There are never gaps between them: when you
-shorten or remove a clip, the clips after it move up.
+shorten or remove a clip, the clips after it move up. A cut can go over from
+one clip to the next instead, with a crossfade or a dip to black: see
+[Transitions](transitions.md). A transition shows as a box over its cut.
 
 <img src="images/timeline-clip-menu.jpg" width="450" alt="The menu you get by right-clicking a clip on the video track, with the Speed submenu open">
 

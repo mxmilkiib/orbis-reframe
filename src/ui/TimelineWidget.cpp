@@ -212,6 +212,38 @@ void TimelineWidget::setClips(const QVector<Clip> &clips)
     update();
 }
 
+void TimelineWidget::setTransitions(const QVector<TransitionView> &transitions)
+{
+    m_transitions = transitions;
+    update();
+}
+
+void TimelineWidget::setSelectedTransition(int leftClipId)
+{
+    if (leftClipId == m_selectedTransition)
+        return;
+    m_selectedTransition = leftClipId;
+    update();
+}
+
+QRect TimelineWidget::transitionRect(int index) const
+{
+    const TransitionView &t = m_transitions[index];
+    for (int i = 0; i + 1 < m_rows.size(); ++i) {
+        if (m_rows[i].clip.id != t.leftClipId)
+            continue;
+        const qint64 cut = m_rows[i + 1].startMs;
+        const int x0 = xForTimelineMs(cut - t.durationMs / 2);
+        const int x1 = xForTimelineMs(cut + t.durationMs / 2);
+        const int cx = xForTimelineMs(cut);
+        // Never thinner than something to click; in the top half of the
+        // row, clear of the trim edges' lower half and the key diamonds.
+        const int half = std::max(kTransitionMinW / 2, (x1 - x0) / 2);
+        return QRect(cx - half, mainTop() + 3, 2 * half, kTransitionH);
+    }
+    return {};
+}
+
 void TimelineWidget::setTracks(const QVector<TrackView> &tracks)
 {
     const bool resized = tracks.size() != m_tracks.size();
@@ -471,6 +503,12 @@ TimelineWidget::Hit TimelineWidget::hitTest(QPoint pos) const
             h.kind = Hit::Header;
             return h;
         }
+        for (int i = 0; i < m_transitions.size(); ++i) // over the clips
+            if (transitionRect(i).contains(pos)) {
+                h.kind = Hit::Transition;
+                h.row = i;
+                return h;
+            }
         for (int i = 0; i < m_rows.size(); ++i)
             if (m_rows[i].rect.adjusted(0, 0, 1, 0).contains(pos)) {
                 h.kind = Hit::MainClip;

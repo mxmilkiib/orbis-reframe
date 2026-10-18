@@ -252,6 +252,36 @@ void TimelineWidget::paintEvent(QPaintEvent *)
         }
     }
 
+    // Transitions, over their cuts: a box as long as the blend, crossed like
+    // the two pictures' levels (one fading out as the other fades in), or a
+    // V for a dip to black (down to nothing at the cut and up again). One
+    // that can't play (no footage past a trim) is a small box in the
+    // warning colour.
+    p.setRenderHint(QPainter::Antialiasing, true);
+    for (int i = 0; i < m_transitions.size(); ++i) {
+        const QRectF rc = QRectF(transitionRect(i)).adjusted(0.5, 0.5, -0.5, -0.5);
+        if (rc.isEmpty())
+            continue;
+        const TransitionView &t = m_transitions[i];
+        const bool sel = t.leftClipId == m_selectedTransition;
+        const bool plays = t.durationMs > 0;
+        p.setBrush(withAlpha(plays ? tc.waveform : tc.warning, sel ? 110 : 70));
+        p.setPen(QPen(sel ? tc.accent : plays ? tc.waveform : tc.warning, sel ? 2 : 1));
+        p.drawRoundedRect(rc, 3, 3);
+        p.setPen(QPen(withAlpha(sel ? tc.accent : tc.waveform, 200), 1));
+        if (plays && t.dip) {
+            const QPointF bottom(rc.center().x(), rc.bottom() - 2);
+            p.drawLine(rc.topLeft() + QPointF(2, 2), bottom);
+            p.drawLine(bottom, rc.topRight() + QPointF(-2, 2));
+        } else if (plays) {
+            p.drawLine(rc.topLeft() + QPointF(2, 2), rc.bottomRight() - QPointF(2, 2));
+            p.drawLine(rc.bottomLeft() + QPointF(2, -2), rc.topRight() + QPointF(-2, 2));
+        } else {
+            p.drawText(rc, Qt::AlignCenter, QStringLiteral("!"));
+        }
+    }
+    p.setRenderHint(QPainter::Antialiasing, false);
+
     // Audio clips.
     const bool audioDrag = m_drag == Drag::AudioMove || m_drag == Drag::AudioTrimIn ||
                            m_drag == Drag::AudioTrimOut;
@@ -347,7 +377,7 @@ void TimelineWidget::paintEvent(QPaintEvent *)
         const int x = xForTimelineMs(m_dropMs);
         const QColor hl = tc.accent;
         int top = mainTop() + kMainH, bottom = rowsBottom;
-        if (m_dropClip || m_dropMain) { // into the main track
+        if (m_dropClip || m_dropMain || m_dropTransition) { // into the main track
             top = kRulerH;
             bottom = mainTop() + kMainH;
         }

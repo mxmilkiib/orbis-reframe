@@ -15,6 +15,7 @@ For how the code works, see the other documents in [`docs/`](..).
 | [Colour](colour.md) | Exposure, contrast, saturation and temperature for each clip |
 | [Overlays](overlays.md) | Picture-in-picture videos: adding, placing, keyframing, frame and border |
 | [Titles](titles.md) | Text over the video: adding a title, its text, font, colour and size, placing and keyframing it |
+| [Transitions](transitions.md) | Going over from one clip to the next at a cut: a crossfade or a dip to black, its length, the footage it uses |
 | [Privacy blur](privacy.md) | Finding and blurring number plates, checking and correcting the scan, blurring a plate by hand |
 | [Projects and export](projects-and-export.md) | The project library, project folders, saving and opening projects, where the clips are, aspect ratio, resolution and frame rate, exporting the video, screenshots |
 | [Media information](media-information.md) | What the Media information section shows about a clip's file, video, audio and camera |

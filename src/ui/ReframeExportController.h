@@ -54,6 +54,11 @@ public:
     // Inactive when `stab` is null / not ready. Shared by playback
     // (MainWindow) and export.
     static stitch::CaptureTiming captureTimingFor(std::shared_ptr<const insv::GyroStabilizer> stab);
+    // A stabilizer for clip file `path` (frame rate `fps`) under `config`,
+    // with the source's sync fine-tune `syncMs`: built from its IMU track
+    // (reads the trailer). Null when it has none.
+    static std::shared_ptr<const insv::GyroStabilizer>
+    buildStabilizer(const QString &path, double fps, const insv::StabConfig &config, double syncMs);
 
     // One timeline clip's contribution to the export.
     struct ClipJob {

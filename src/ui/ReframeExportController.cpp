@@ -3,6 +3,7 @@
 #include "ReframeFlatten.h"  // exportpipe::FlattenWriter (system FFmpeg)
 #include "ReframeRenderer.h" // exportpipe::RenderRectilinear
 
+#include <InsvTrailer.h>        // insv::ReadInsvTelemetry
 #include <NativeStitchSource.h> // stitch::NativeStitchSource, stitch::Frame, stitch::PreviewStitchConfig
 #include <ProbeClip.h>          // stitch::ProbeClip
 #include <VulkanVideoDecoder.h> // insv::sharedVulkanDevice
@@ -37,6 +38,18 @@ ReframeExportController::captureTimingFor(std::shared_ptr<const insv::GyroStabil
         stab->bodyRotation(tSec, dtSec, r);
     };
     return t;
+}
+
+std::shared_ptr<const insv::GyroStabilizer>
+ReframeExportController::buildStabilizer(const QString &path, double fps,
+                                         const insv::StabConfig &config, double syncMs)
+{
+    auto tele = insv::ReadInsvTelemetry(path.toStdString());
+    if (!tele || tele->imu.size() < 2)
+        return nullptr;
+    auto stab = std::make_shared<insv::GyroStabilizer>();
+    stab->build(*tele, fps, config, syncMs / 1000.0);
+    return stab->ready() ? stab : nullptr;
 }
 
 QImage ReframeExportController::renderStill(const ClipJob &c, qint64 sourceMs,
@@ -139,16 +152,35 @@ void ReframeExportController::run(const Request &req)
         return;
     }
 
-    // Per-clip weight for the one progress bar, by output frame count.
+    // Which output frames each clip fills: those whose timeline time
+    // (llround(k * outFrameMs), as the overlays and transitions are drawn
+    // at) falls in its span on the timeline. So the cut lands on the same
+    // frame for the main track as for a transition's layers over it -- a
+    // frame apart, one clip would show at full strength in the middle of a
+    // crossfade -- and it doesn't drift by rounding each clip's length on
+    // its own. Also each clip's weight for the one progress bar.
+    const double outFrameMs = 1000.0 / req.fps;
+    const auto frameAtOrAfter = [outFrameMs](int64_t ms) {
+        int64_t k = std::max<int64_t>(0, static_cast<int64_t>(std::ceil(ms / outFrameMs)));
+        while (k > 0 && std::llround((k - 1) * outFrameMs) >= ms)
+            --k;
+        while (std::llround(k * outFrameMs) < ms)
+            ++k;
+        return k;
+    };
     const int n = req.clips.size();
-    std::vector<int64_t> frames(n);
+    std::vector<int64_t> frames(n), firstFrame(n), clipStartMs(n);
     int64_t totalFrames = 0;
+    int64_t startMs = 0;
     for (int i = 0; i < n; ++i) {
         const ClipJob &c = req.clips[i];
-        // The clip's span on the output timeline, at its speed.
-        frames[i] = std::max<int64_t>(
-            0, std::llround((c.trimOutMs - c.trimInMs) / c.speed / 1000.0 * req.fps));
+        // Its span on the timeline, at its speed (ClipItem::timelineDurationMs).
+        const int64_t endMs = startMs + std::llround((c.trimOutMs - c.trimInMs) / c.speed);
+        clipStartMs[i] = startMs;
+        firstFrame[i] = frameAtOrAfter(startMs);
+        frames[i] = std::max<int64_t>(0, frameAtOrAfter(endMs) - firstFrame[i]);
         totalFrames += frames[i];
+        startMs = endMs;
     }
     if (totalFrames <= 0)
         totalFrames = 1;
@@ -192,7 +224,6 @@ void ReframeExportController::run(const Request &req)
     }
 
     std::string err;
-    const double outFrameMs = 1000.0 / req.fps;
 
     // Held by pointer so a cancelled export can close (destroy) the encoder and
     // its half-written output file *before* deleting that file below.
@@ -272,12 +303,14 @@ void ReframeExportController::run(const Request &req)
         if (eqW <= 0)
             eqW = stitch::ExportStitchWidth(probe.width, req.outWidth);
         // Conform: output frame k of this clip shows the source frame whose
-        // time window [pts - half, pts + half) holds trimIn + k * outFrameMs *
-        // speed. A faster source (or speed > 1) drops frames, a slower one (or
-        // slow motion) repeats them.
+        // time window [pts - half, pts + half) holds the source time of its
+        // timeline time. A faster source (or speed > 1) drops frames, a
+        // slower one (or slow motion) repeats them.
         const double srcHalfMs = 500.0 / probe.fps;
-        const double srcStepMs = outFrameMs * c.speed;
-        auto targetSrcMs = [&](int64_t k) { return c.trimInMs + k * srcStepMs; };
+        auto targetSrcMs = [&](int64_t k) {
+            const int64_t ms = std::llround((firstFrame[i] + k) * outFrameMs);
+            return c.trimInMs + double(ms - clipStartMs[i]) * c.speed;
+        };
         eqW &= ~1;
         stitch::PreviewStitchConfig sc;
         sc.width = eqW;

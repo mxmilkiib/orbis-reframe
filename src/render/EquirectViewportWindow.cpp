@@ -33,7 +33,8 @@ QVulkanWindowRenderer *EquirectViewportWindow::createRenderer()
 }
 
 void EquirectViewportWindow::SetFrame(int width, int height, std::vector<uint8_t> rgba,
-                                      const float stab[9], std::vector<RegionOutline> outlines)
+                                      const float stab[9], std::vector<RegionOutline> outlines,
+                                      const FrameView &view)
 {
     QMutexLocker lock(&m_frameMutex);
     m_pendingWidth = width;
@@ -48,6 +49,7 @@ void EquirectViewportWindow::SetFrame(int width, int height, std::vector<uint8_t
     if (stab)
         std::copy(stab, stab + 9, m_pendingStab);
     m_pendingHasOverlay = false;
+    m_pendingView = view;
 }
 
 void EquirectViewportWindow::SetFrame(int width, int height, std::vector<uint8_t> rgba,
@@ -60,7 +62,8 @@ void EquirectViewportWindow::SetFrame(int width, int height, std::vector<uint8_t
 }
 
 void EquirectViewportWindow::SetLensFrame(std::shared_ptr<const render::LensFrame> frame,
-                                          const float stab[9], std::vector<RegionOutline> outlines)
+                                          const float stab[9], std::vector<RegionOutline> outlines,
+                                          const FrameView &view)
 {
     QMutexLocker lock(&m_frameMutex);
     m_pendingLens = std::move(frame); // a replaced pending frame goes straight back to its ring
@@ -73,6 +76,7 @@ void EquirectViewportWindow::SetLensFrame(std::shared_ptr<const render::LensFram
     if (stab)
         std::copy(stab, stab + 9, m_pendingStab);
     m_pendingHasOverlay = false;
+    m_pendingView = view;
 }
 
 void EquirectViewportWindow::ClearPicture()
@@ -88,6 +92,7 @@ void EquirectViewportWindow::ClearPicture()
         m_pendingOutlines.clear();
         m_framePending = true;
         m_pendingIsClear = true;
+        m_pendingView = {};
         m_pendingHasStab = true;
         std::fill(m_pendingStab, m_pendingStab + 9, 0.0f);
         m_pendingStab[0] = m_pendingStab[4] = m_pendingStab[8] = 1.0f;
@@ -123,6 +128,12 @@ bool EquirectViewportWindow::TakePendingFrame(int &width, int &height, std::vect
         ++m_framesTaken;
     if (m_pendingHasStab) // the renderer reads m_stab right after this, same thread
         std::copy(m_pendingStab, m_pendingStab + 9, m_stab);
+    if (m_pendingView.hasPose) // ... and the view and grade
+        SetPose(m_pendingView.pose[0], m_pendingView.pose[1], m_pendingView.pose[2],
+                m_pendingView.pose[3]);
+    if (m_pendingView.hasGrade)
+        SetColorGrade(m_pendingView.grade);
+    m_pendingView = {};
     if (m_pendingHasOverlay) { // ... and the pose / marker
         const FrameOverlay &o = m_pendingOverlay;
         SetPose(o.pose[0], o.pose[1], o.pose[2], o.pose[3]);
@@ -131,6 +142,10 @@ bool EquirectViewportWindow::TakePendingFrame(int &width, int &height, std::vect
         else
             ClearMarker();
         m_pendingHasOverlay = false;
+    }
+    { // ... and the insets that go with it (RenderInsets)
+        QMutexLocker insetLock(&m_insetMutex);
+        m_insetsHeld = false;
     }
     return true;
 }
@@ -189,6 +204,27 @@ void EquirectViewportWindow::ColorGradeArr(float out[4]) const
 {
     for (int i = 0; i < 4; ++i)
         out[i] = m_colorGrade[i];
+}
+
+void EquirectViewportWindow::SetFrameInsets(std::vector<InsetDraw> insets)
+{
+    // Under m_frameMutex throughout, so TakePendingFrame can't come in
+    // between (it takes m_insetMutex inside m_frameMutex too).
+    QMutexLocker frameLock(&m_frameMutex);
+    {
+        QMutexLocker lock(&m_insetMutex);
+        m_insetsHeld = m_framePending; // until TakePendingFrame takes the picture
+    }
+    SetInsets(std::move(insets));
+}
+
+std::vector<EquirectViewportWindow::InsetDraw> EquirectViewportWindow::RenderInsets()
+{
+    std::vector<InsetDraw> now = Insets();
+    QMutexLocker lock(&m_insetMutex);
+    if (!m_insetsHeld)
+        m_renderInsets = std::move(now);
+    return m_renderInsets;
 }
 
 void EquirectViewportWindow::SetInsets(std::vector<InsetDraw> insets)

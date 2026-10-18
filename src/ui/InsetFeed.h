@@ -3,6 +3,8 @@
 #include "../core/TrackClip.h" // inset::Look / Frame, InsetKeyTrack
 #include "../render/EquirectViewportWindow.h"
 
+#include <PictureSource.h> // exportpipe::PictureSource
+
 #include <QString>
 
 #include <array>
@@ -17,7 +19,8 @@
 // Serves the video tracks' insets to playback: the "second segment"
 // next to PlaybackController's main one. One decoder thread keeps, per inset
 // clip near the playhead, a few frames decoded ahead
-// (exportpipe::FlatVideoReader, RGBA at a capped size); the presenter asks
+// (exportpipe::FlatVideoReader, RGBA at a capped size; or a 360 clip's view
+// from its exportpipe::PictureSource, a transition's other clip); the presenter asks
 // for what to draw at its clock time each tick. A playhead jump -- a seek, a
 // scrub, or a clip edit that moves the frames -- re-anchors that clip's
 // decode at the new time; until the frame for it is ready the previous
@@ -38,6 +41,9 @@ public:
         double aspect = 16.0 / 9.0;
         qint64 fadeInMs = 0;
         qint64 fadeOutMs = 0;
+        // A straight opacity ramp over the clip (exportpipe::InsetClipJob's).
+        float rampFrom = 1.0f;
+        float rampTo = 1.0f;
         inset::Look look;
         inset::Frame frame;
         InsetKeyTrack keys;
@@ -51,6 +57,19 @@ public:
         std::shared_ptr<const std::vector<uint8_t>> still;
         int stillW = 0, stillH = 0;
         double stillWidthPerSize = 0.0;
+        // A 360 clip's view (a transition's other clip): drawn full frame
+        // from this instead of `path`'s frames, at the output's shape
+        // (`aspect`). `pictureKey` names what it renders -- the clip and
+        // every setting its picture depends on: a new key, a new picture.
+        exportpipe::PictureSource::Factory picture;
+        QString pictureKey;
+        // A transition's layer: drawn only while the main track shows this
+        // clip (ClipItem::id), and then also a little either side of its
+        // span (at its first / last frame and ramp). The main picture is the
+        // newest decoded frame, which may lag the clock: timed by the clock
+        // alone, the layer would switch a frame apart from the cut it
+        // blends over, and that frame show one clip at full strength.
+        int overMainClipId = 0;
 
         qint64 spanMs() const { return std::llround((trimOutMs - trimInMs) / speed); }
         qint64 endMs() const { return startMs + spanMs(); }
@@ -65,8 +84,9 @@ public:
         // Same decode: the frames it would show are the same.
         bool sameFrames(const Clip &o) const
         {
-            return path == o.path && still == o.still && startMs == o.startMs &&
-                   trimInMs == o.trimInMs && trimOutMs == o.trimOutMs && speed == o.speed;
+            return path == o.path && still == o.still && pictureKey == o.pictureKey &&
+                   startMs == o.startMs && trimInMs == o.trimInMs && trimOutMs == o.trimOutMs &&
+                   speed == o.speed;
         }
     };
 
@@ -77,10 +97,12 @@ public:
     // once (the topmost win).
     void setClips(std::vector<Clip> clips);
 
-    // What to draw at timeline time `ms`, and where the decoder should work
-    // (ahead of `ms` while `playing`, just at it while paused). Presenter
-    // thread.
-    std::vector<EquirectViewportWindow::InsetDraw> frameFor(qint64 ms, bool playing);
+    // What to draw at timeline time `ms`, over main-track clip
+    // `mainClipId` (the one showing; 0 = none), and where the decoder should
+    // work (ahead of `ms` while `playing`, just at it while paused).
+    // Presenter thread.
+    std::vector<EquirectViewportWindow::InsetDraw> frameFor(qint64 ms, bool playing,
+                                                            int mainClipId = 0);
 
 private:
     struct Frame {

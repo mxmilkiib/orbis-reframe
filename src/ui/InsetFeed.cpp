@@ -22,6 +22,9 @@ constexpr qint64 kLingerMs = 500;
 // While playing, how far the clock may run past the newest decoded frame
 // before the decode is re-anchored (a seek) rather than waited for.
 constexpr qint64 kBehindMs = 500;
+// How far past its span a transition's layer still shows over its main
+// clip (Clip::overMainClipId): the main picture lagging the clock.
+constexpr qint64 kOverMainSlackMs = 250;
 
 } // namespace
 
@@ -40,7 +43,14 @@ struct InsetFeed::Stream {
     double frameMs = 0.0; // set when the reader opens
     // --- decoder thread only ---
     std::unique_ptr<exportpipe::FlatVideoReader> reader;
-    QString openedPath;
+    std::unique_ptr<exportpipe::PictureSource> picture; // instead, for a 360 view
+    QString openedPath; // or the picture's key
+    bool open() const { return reader || picture; }
+    void close()
+    {
+        reader.reset();
+        picture.reset();
+    }
 };
 
 InsetFeed::InsetFeed()
@@ -77,7 +87,7 @@ void InsetFeed::setClips(std::vector<Clip> clips)
                 s->eof = false;
                 s->needAnchor = true;
                 ++s->gen;
-                if (s->clip.path != c.path)
+                if (s->clip.path != c.path || s->clip.pictureKey != c.pictureKey)
                     s->failed = false;
             }
             if (c.still && (s->stillKey == 0 || s->clip.still != c.still))
@@ -99,18 +109,28 @@ bool InsetFeed::active(const Clip &c, qint64 ms) const
     return !c.still && ms >= c.startMs - kPrerollMs && ms < c.endMs() + kLingerMs;
 }
 
-std::vector<EquirectViewportWindow::InsetDraw> InsetFeed::frameFor(qint64 ms, bool playing)
+std::vector<EquirectViewportWindow::InsetDraw> InsetFeed::frameFor(qint64 clockMs, bool playing,
+                                                                   int mainClipId)
 {
     std::vector<EquirectViewportWindow::InsetDraw> out;
     bool wake = false;
     {
         std::lock_guard<std::mutex> lk(m_mx);
-        wake = ms != m_targetMs || playing != m_playing;
-        m_targetMs = ms;
+        wake = clockMs != m_targetMs || playing != m_playing;
+        m_targetMs = clockMs;
         m_playing = playing;
         for (const auto &sp : m_streams) {
             Stream &s = *sp;
             const Clip &c = s.clip;
+            qint64 ms = clockMs;
+            if (c.overMainClipId) {
+                if (c.overMainClipId != mainClipId || ms < c.startMs - kOverMainSlackMs ||
+                    ms >= c.endMs() + kOverMainSlackMs) {
+                    s.haveShown = false;
+                    continue;
+                }
+                ms = std::clamp(ms, c.startMs, std::max(c.startMs, c.endMs() - 1));
+            }
             if (ms < c.startMs || ms >= c.endMs()) {
                 s.haveShown = false;
                 continue;
@@ -124,8 +144,10 @@ std::vector<EquirectViewportWindow::InsetDraw> InsetFeed::frameFor(qint64 ms, bo
                 d.height = c.stillH;
                 d.look = c.keys.isEmpty() ? c.look : c.keys.sample(c.sourceAt(ms));
                 d.look.width = float(d.look.width * c.stillWidthPerSize);
-                d.look.opacity *= inset::fadeGain(ms - c.startMs, c.spanMs(), c.fadeInMs, c.fadeOutMs);
-                d.aspect = double(c.stillW) / std::max(1, c.stillH);
+                d.look.opacity *= inset::fadeGain(ms - c.startMs, c.spanMs(), c.fadeInMs, c.fadeOutMs) *
+                                  inset::rampGain(ms - c.startMs, c.spanMs(), c.rampFrom, c.rampTo);
+                d.aspect = c.fullFrame ? c.aspect : double(c.stillW) / std::max(1, c.stillH);
+                d.locked = c.fullFrame;
                 out.push_back(std::move(d));
                 continue;
             }
@@ -162,7 +184,8 @@ std::vector<EquirectViewportWindow::InsetDraw> InsetFeed::frameFor(qint64 ms, bo
             d.width = s.shown.width;
             d.height = s.shown.height;
             d.look = c.keys.isEmpty() ? c.look : c.keys.sample(c.sourceAt(ms));
-            d.look.opacity *= inset::fadeGain(local, c.spanMs(), c.fadeInMs, c.fadeOutMs);
+            d.look.opacity *= inset::fadeGain(local, c.spanMs(), c.fadeInMs, c.fadeOutMs) *
+                              inset::rampGain(local, c.spanMs(), c.rampFrom, c.rampTo);
             d.frame = c.frame;
             d.aspect = c.aspect;
             d.colorGrade = c.colorGrade;
@@ -194,8 +217,30 @@ bool InsetFeed::work(Stream &s, qint64 target, bool playing)
             return false;
     }
 
+    // A 360 clip's view: open (or re-open, if what it renders changed) its
+    // picture source, at the size of a full-frame picture of its shape.
+    if (clip.picture && (!s.picture || s.openedPath != clip.pictureKey)) {
+        s.close();
+        s.picture = clip.picture();
+        s.openedPath = clip.pictureKey;
+        std::string err;
+        if (!s.picture || !s.picture->open(err)) {
+            std::fprintf(stderr, "[inset] %s: %s\n", qPrintable(clip.path), err.c_str());
+            s.picture.reset();
+            std::lock_guard<std::mutex> lk(m_mx);
+            s.failed = true;
+            return true;
+        }
+        const double aspect = std::max(0.1, clip.aspect);
+        const int w = aspect >= 1.0 ? kFullFrameMaxSide : int(std::lround(kFullFrameMaxSide * aspect));
+        s.picture->setOutputSize(std::max(4, w & ~3),
+                                 std::max(2, int(std::lround(w / aspect)) & ~1));
+        std::lock_guard<std::mutex> lk(m_mx);
+        s.frameMs = 1000.0 / std::max(1.0, s.picture->fps());
+    }
     // Open (or re-open, if the clip was re-sourced) the reader.
-    if (!s.reader || s.openedPath != clip.path) {
+    if (!clip.picture && (!s.reader || s.openedPath != clip.path)) {
+        s.close();
         s.reader = std::make_unique<exportpipe::FlatVideoReader>();
         s.openedPath = clip.path;
         std::string err;
@@ -220,7 +265,9 @@ bool InsetFeed::work(Stream &s, qint64 target, bool playing)
     bool ended = false;
     if (anchor) {
         const qint64 at = std::clamp(target, clip.startMs, std::max(clip.startMs, clip.endMs() - 1));
-        if (const exportpipe::VideoFrame *v = s.reader->frameAt(clip.sourceAt(at))) {
+        const qint64 srcMs = clip.sourceAt(at);
+        if (const exportpipe::VideoFrame *v = s.picture ? s.picture->frameAt(srcMs)
+                                                        : s.reader->frameAt(srcMs)) {
             f.timelineMs = clip.timelineAt(v->ptsMs);
             f.width = v->width;
             f.height = v->height;
@@ -231,7 +278,8 @@ bool InsetFeed::work(Stream &s, qint64 target, bool playing)
         }
     } else {
         exportpipe::VideoFrame v;
-        if (s.reader->readNext(v) && clip.timelineAt(v.ptsMs) < clip.endMs()) {
+        const bool read = s.picture ? s.picture->readNext(v) : s.reader->readNext(v);
+        if (read && clip.timelineAt(v.ptsMs) < clip.endMs()) {
             f.timelineMs = clip.timelineAt(v.ptsMs);
             f.width = v.width;
             f.height = v.height;
@@ -272,7 +320,7 @@ void InsetFeed::decoderLoop()
                     return true;
                 for (const auto &s : m_streams) {
                     const bool live = !s->removed && !s->failed && active(s->clip, m_targetMs);
-                    if (!live && s->reader)
+                    if (!live && s->open())
                         return true; // a decoder to let go of
                     if (live && (s->needAnchor ||
                                  (m_playing && !s->eof && s->queue.size() < kAhead)))
@@ -294,14 +342,14 @@ void InsetFeed::decoderLoop()
             {
                 std::lock_guard<std::mutex> lk(m_mx);
                 live = !s->removed && !s->failed && active(s->clip, target);
-                if (!live && s->reader) {
+                if (!live && s->open()) {
                     s->queue.clear();
                     s->needAnchor = true;
                     ++s->gen;
                 }
             }
             if (!live) {
-                s->reader.reset(); // free the decoder
+                s->close(); // free the decoder
                 continue;
             }
             did |= work(*s, target, playing);

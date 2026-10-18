@@ -361,6 +361,18 @@ QWidget[sidebarPart="strip"] QToolButton:hover {
     padding: 0 12px 8px 12px;
 }
 
+/* Transitions tab. */
+#transitionsPanel, #transitionList {
+    background-color: @panel;
+}
+#transitionsHint {
+    color: @textDim;
+    padding: 0 12px 8px 12px;
+}
+#transitionNote {
+    color: @warning;
+}
+
 /* ================= Project library (start screen) ================= */
 
 #projectLibrary {

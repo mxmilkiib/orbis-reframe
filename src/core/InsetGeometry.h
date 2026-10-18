@@ -154,4 +154,15 @@ inline float fadeGain(int64_t localMs, int64_t spanMs, int64_t fadeInMs, int64_t
     return static_cast<float>(std::clamp(g, 0.0, 1.0));
 }
 
+// Opacity multiplier going in a straight line from `from` at the start of a
+// clip `spanMs` long to `to` at its end, at clip-local timeline time
+// `localMs`: a transition's other clip blending in or out.
+inline float rampGain(int64_t localMs, int64_t spanMs, float from, float to)
+{
+    if (spanMs <= 0)
+        return from;
+    const double t = std::clamp(double(localMs) / double(spanMs), 0.0, 1.0);
+    return static_cast<float>(from + (to - from) * t);
+}
+
 } // namespace inset

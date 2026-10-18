@@ -534,8 +534,9 @@ bool VulkanFisheyeStitcher::initAdopt(VkInstance inst, VkPhysicalDevice phys, Vk
     d->queueFamily = computeQueueFamily;
     vkGetPhysicalDeviceMemoryProperties(d->phys, &d->memProps);
     if (queueFlags) {
-        // FFmpeg created its queues with these flags (PROTECTED on some
-        // driver/FFmpeg pairs) -- vkGetDeviceQueue would return NULL.
+        // FFmpeg created its queues with these flags (INTERNALLY_SYNCHRONIZED
+        // on FFmpeg 9+ with drivers that offer it) -- vkGetDeviceQueue would
+        // return NULL.
         VkDeviceQueueInfo2 qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2};
         qi.flags = queueFlags;
         qi.queueFamilyIndex = d->queueFamily;
@@ -658,26 +659,52 @@ bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, VkFormat frameFormat, std::st
     VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sli.bindingCount = 6;
     sli.pBindings = b;
-    vkCreateDescriptorSetLayout(d->device, &sli, nullptr, &d->setLayout);
+    if (vkCreateDescriptorSetLayout(d->device, &sli, nullptr, &d->setLayout) != VK_SUCCESS) {
+        err = "vkCreateDescriptorSetLayout failed";
+        return false;
+    }
+
+    // A sampler with a ycbcr conversion can take more than one descriptor
+    // of the pool; the driver says how many (NV12: 1 on NVIDIA, 2 on RADV
+    // and llvmpipe).
+    uint32_t samplerDescriptors = 1;
+    if (nv12Mode) {
+        VkPhysicalDeviceImageFormatInfo2 fi{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2};
+        fi.format = d->ycbcrFormat;
+        fi.type = VK_IMAGE_TYPE_2D;
+        fi.tiling = VK_IMAGE_TILING_OPTIMAL;
+        fi.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+        VkSamplerYcbcrConversionImageFormatProperties yp{
+            VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_IMAGE_FORMAT_PROPERTIES};
+        VkImageFormatProperties2 fp{VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2, &yp};
+        if (vkGetPhysicalDeviceImageFormatProperties2(d->phys, &fi, &fp) == VK_SUCCESS)
+            samplerDescriptors = std::max(1u, yp.combinedImageSamplerDescriptorCount);
+    }
 
     // Two sets of this layout: the stitch's, and the fused view pass's.
-    // Sized with headroom -- RADV accounts the ycbcr-conversion immutable
-    // samplers as more than one descriptor internally and runs out of a
-    // minimally-sized pool (OUT_OF_POOL_MEMORY on the second set).
-    VkDescriptorPoolSize ps[3]{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4},
-                               {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8},
-                               {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12}};
+    VkDescriptorPoolSize ps[3]{
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * samplerDescriptors},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6}};
     VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpi.maxSets = 4;
     dpi.poolSizeCount = 3;
     dpi.pPoolSizes = ps;
-    vkCreateDescriptorPool(d->device, &dpi, nullptr, &d->descPool);
+    if (vkCreateDescriptorPool(d->device, &dpi, nullptr, &d->descPool) != VK_SUCCESS) {
+        err = "vkCreateDescriptorPool failed";
+        return false;
+    }
 
     VkDescriptorSetAllocateInfo dsi{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     dsi.descriptorPool = d->descPool;
     dsi.descriptorSetCount = 1;
     dsi.pSetLayouts = &d->setLayout;
-    vkAllocateDescriptorSets(d->device, &dsi, &d->descSet);
+    const VkResult ar = vkAllocateDescriptorSets(d->device, &dsi, &d->descSet);
+    if (ar != VK_SUCCESS) {
+        err = "vkAllocateDescriptorSets (stitch) failed, VkResult " + std::to_string(ar);
+        return false;
+    }
 
     const shaders::Spirv spv =
         nv12Mode ? shaders::fisheyeStitchNv12Comp() : shaders::fisheyeStitchComp();

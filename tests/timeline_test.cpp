@@ -343,6 +343,106 @@ void testTimelineDuplicate()
     CHECK(mic && mic->clips.size() == 2 && mic->clips[0].linkedClipId == a);
 }
 
+// Transitions: one per cut, kept at its cut through a split or a copy of
+// the clip before it, dropped with the cut; what plays is shortened to the
+// footage past the trims and to half of either clip.
+void testTransitions()
+{
+    Timeline tl;
+    int changed = 0;
+    QObject::connect(&tl, &Timeline::transitionsChanged, [&changed] { ++changed; });
+    const int a = tl.appendClip("a.insv", 20000, 30.0);
+    const int b = tl.appendClip("b.insv", 20000, 30.0);
+    const int c = tl.appendClip("c.insv", 20000, 30.0);
+    tl.setClipTrimIn(a, 2000);
+    tl.setClipTrimOut(a, 10000); // 8 s, 10 s past its end
+    tl.setClipTrimIn(b, 3000);
+    tl.setClipTrimOut(b, 13000); // 10 s, 3 s before its start
+
+    CHECK(!tl.setTransition(c, Transition::Type::Crossfade, 1000)); // no clip after c
+    CHECK(tl.setTransition(a, Transition::Type::Crossfade, 1000));
+    CHECK(changed == 1);
+    CHECK(!tl.setTransition(a, Transition::Type::Crossfade, 1000)); // unchanged
+    CHECK(changed == 1);
+    const Transition *t = tl.transitionAfter(a);
+    CHECK(t && t->rightClipId == b && tl.transitions().size() == 1);
+    if (!t)
+        return;
+    Timeline::TransitionSpan span = tl.transitionSpan(*t);
+    CHECK(span.cutMs == 8000 && span.durationMs == 1000 && span.plays());
+    CHECK(span.startMs() == 7500 && span.endMs() == 8500);
+    CHECK(span.limit == Timeline::TransitionSpan::Limit::None);
+    // The footage it shows past the trims, at each clip's speed.
+    qint64 from = 0, to = 0;
+    CHECK(tl.shownSourceRange(a, from, to) && from == 2000 && to == 10500);
+    tl.setClipSpeed(b, 2.0);
+    CHECK(tl.shownSourceRange(b, from, to) && from == 2000 && to == 13000);
+    tl.setClipSpeed(b, 1.0);
+    CHECK(tl.shownSourceRange(c, from, to) && from == 0 && to == 20000);
+    CHECK(!tl.shownSourceRange(999, from, to));
+
+    // Clamped to [kMinMs, kMaxMs]; then shortened by what there is: b has 3 s
+    // before its trim-in, so 6 s at most...
+    tl.setTransition(a, Transition::Type::Crossfade, 60000);
+    t = tl.transitionAfter(a);
+    CHECK(t->durationMs == Transition::kMaxMs);
+    span = tl.transitionSpan(*t);
+    CHECK(span.durationMs == 6000 && span.limit == Timeline::TransitionSpan::Limit::FootageAfter);
+    // ... 1.5 s of it at double speed; and with nothing past a's end, none.
+    tl.setClipSpeed(b, 2.0);
+    CHECK(tl.transitionSpan(*tl.transitionAfter(a)).durationMs == 3000);
+    tl.setClipSpeed(b, 1.0);
+    tl.setClipTrimOut(a, 20000);
+    span = tl.transitionSpan(*tl.transitionAfter(a));
+    CHECK(span.durationMs == 0 && !span.plays());
+    CHECK(span.limit == Timeline::TransitionSpan::Limit::FootageBefore);
+    // A dip to black fades within the clips: no footage past the trims
+    // needed, none shown; changing the type is a change.
+    const int changedDip = changed;
+    CHECK(tl.setTransition(a, Transition::Type::DipToBlack, 2000));
+    CHECK(changed == changedDip + 1);
+    span = tl.transitionSpan(*tl.transitionAfter(a));
+    CHECK(span.durationMs == 2000 && span.limit == Timeline::TransitionSpan::Limit::None);
+    CHECK(tl.shownSourceRange(a, from, to) && from == 2000 && to == 20000);
+    CHECK(tl.shownSourceRange(b, from, to) && from == 3000 && to == 13000);
+    tl.setTransition(a, Transition::Type::Crossfade, Transition::kMaxMs);
+    // Half of the shorter clip at most.
+    tl.setClipTrimIn(a, 15000);
+    tl.setClipTrimOut(a, 18000); // 3 s
+    span = tl.transitionSpan(*tl.transitionAfter(a));
+    CHECK(span.durationMs == 3000 && span.limit == Timeline::TransitionSpan::Limit::ClipLength);
+
+    // A split of the clip before keeps it at the cut: the right part's now.
+    const int changedBefore = changed;
+    const int a2 = tl.splitClip(a, 16500);
+    CHECK(a2 != 0 && !tl.transitionAfter(a) && tl.transitionAfter(a2));
+    CHECK(changed == changedBefore + 1);
+    // So does a copy of it.
+    const int a3 = tl.duplicateClip(a2);
+    CHECK(!tl.transitionAfter(a2) && tl.transitionAfter(a3) &&
+          tl.transitionAfter(a3)->rightClipId == b);
+    // Splitting the clip after it changes nothing.
+    tl.splitClip(b, 8000);
+    CHECK(tl.transitionAfter(a3) && tl.transitionAfter(a3)->rightClipId == b);
+
+    // A cut that goes takes its transition with it: a clip put in between,
+    // a reorder, a removal.
+    tl.setTransition(b, Transition::Type::Crossfade, 500); // b | its split part
+    CHECK(tl.transitions().size() == 2);
+    tl.insertClip(tl.indexOfId(b), "d.insv", 5000, 30.0); // between a3 and b
+    CHECK(tl.transitions().size() == 1 && !tl.transitionAfter(a3));
+    tl.moveClip(b, tl.count() - 1);
+    CHECK(tl.transitions().isEmpty());
+    tl.setTransition(a, Transition::Type::Crossfade, 500);
+    CHECK(tl.removeTransition(a) && !tl.removeTransition(a));
+    tl.setTransition(a, Transition::Type::Crossfade, 500);
+    tl.removeClip(tl.clipAt(tl.indexOfId(a) + 1).id);
+    CHECK(tl.transitions().isEmpty());
+    tl.setTransition(a, Transition::Type::Crossfade, 500);
+    tl.clear();
+    CHECK(tl.transitions().isEmpty());
+}
+
 // Where added files go and what an audio clip links to: the first track
 // with room, the nearest clip of the same footage, an overlay's own sound.
 void testTrackQueries()
@@ -403,6 +503,7 @@ int main()
     testTimelineStructure();
     testTimelineSplit();
     testTimelineDuplicate();
+    testTransitions();
     testTrackQueries();
     return modeltest::finish("timeline_test");
 }

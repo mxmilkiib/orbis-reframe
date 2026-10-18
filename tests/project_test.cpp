@@ -1542,6 +1542,67 @@ void testTitleJson()
     }
 }
 
+// Transitions: saved at their cut (the index of the clip before it), with
+// the version that added them; loaded back; an undo step like any edit.
+void testTransitionJson()
+{
+    QTemporaryDir tmp;
+    CHECK(tmp.isValid());
+    const QString video = tmp.path() + "/clip.insv";
+    writeFile(video);
+    const QString file = tmp.path() + "/transitions.orp";
+    auto document = [&file] {
+        QFile f(file);
+        return f.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(f.readAll()).object()
+                                           : QJsonObject();
+    };
+    QString err;
+    {
+        Project p;
+        Timeline *tl = p.timeline();
+        tl->appendClip(video, 10000, 30.0, 7680, 3840, 0);
+        const int b = tl->appendClip(video, 10000, 30.0, 7680, 3840, 0);
+        tl->appendClip(video, 10000, 30.0, 7680, 3840, 0);
+        CHECK(p.save(file, &err));
+        CHECK(document().value("version").toInt() == Project::kPlainFormatVersion);
+        CHECK(!document().value("timeline").toObject().contains("transitions"));
+        tl->setTransition(b, Transition::Type::Crossfade, 1500);
+        CHECK(p.modified());
+        CHECK(p.save(file, &err));
+        CHECK(document().value("version").toInt() == Project::kTransitionFormatVersion);
+        const QJsonArray jt = document().value("timeline").toObject().value("transitions").toArray();
+        CHECK(jt.size() == 1);
+        CHECK(jt.at(0).toObject().value("cut").toInt() == 1);
+        CHECK(jt.at(0).toObject().value("type").toString() == "crossfade");
+        CHECK(jt.at(0).toObject().value("durationMs").toInt() == 1500);
+    }
+    {
+        Project p;
+        CHECK(p.load(file, &err));
+        const Timeline *tl = p.timeline();
+        CHECK(tl->transitions().size() == 1);
+        const Transition *t = tl->transitionAfter(tl->clipAt(1).id);
+        CHECK(t && t->rightClipId == tl->clipAt(2).id && t->durationMs == 1500);
+        CHECK(!p.modified());
+        // Removing it is undone like any edit.
+        p.timeline()->removeTransition(tl->clipAt(1).id);
+        CHECK(tl->transitions().isEmpty() && p.canUndo());
+        p.undo();
+        CHECK(p.timeline()->transitions().size() == 1);
+        // A dip to black by its name.
+        p.timeline()->setTransition(p.timeline()->clipAt(1).id, Transition::Type::DipToBlack, 800);
+        CHECK(p.save(file, &err));
+        const QJsonArray jt = document().value("timeline").toObject().value("transitions").toArray();
+        CHECK(jt.size() == 1 && jt.at(0).toObject().value("type").toString() == "dipToBlack");
+    }
+    {
+        Project p;
+        CHECK(p.load(file, &err));
+        const Transition *t = p.timeline()->transitionAfter(p.timeline()->clipAt(1).id);
+        CHECK(t && t->type == Transition::Type::DipToBlack && t->durationMs == 800);
+    }
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv); // Project's timers want one (never run here)
@@ -1561,5 +1622,6 @@ int main(int argc, char **argv)
     testClipStitchJson();
     testPlateScansInUse();
     testTitleJson();
+    testTransitionJson();
     return modeltest::finish("project_test");
 }

@@ -8,6 +8,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_vulkan.h>
+#include <libavutil/version.h>
 }
 
 namespace insv {
@@ -130,7 +131,11 @@ void VulkanVideoDecoder::deviceHandles(VkInstance& inst, VkPhysicalDevice& phys,
     inst = vk->inst;
     phys = vk->phys_dev;
     dev = vk->act_dev;
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(60, 32, 100)
     queueFlags = vk->queue_flags;
+#else
+    queueFlags = 0; // older FFmpeg creates its queues without flags
+#endif
     computeQueueFamily = UINT32_MAX;
     for (int i = 0; i < vk->nb_qf; ++i) {
         if (vk->qf[i].flags & VK_QUEUE_COMPUTE_BIT) {
