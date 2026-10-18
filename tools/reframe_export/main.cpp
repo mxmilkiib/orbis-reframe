@@ -29,6 +29,11 @@
 #include <NativeStitchSource.h> // stitch::NativeStitchSource, stitch::Frame, stitch::PreviewStitchConfig
 #include <ProbeClip.h>          // stitch::ProbeClip
 
+extern "C" {
+#include <libavutil/buffer.h> // av_buffer_unref
+#include <libavutil/frame.h>  // av_frame_free
+}
+
 #include "FlatVideoReader.h" // exportpipe::FlatVideoReader::probe (--inset)
 #include "InsetCompositor.h" // exportpipe::InsetCompositor (--inset)
 #include "ReframeFlatten.h" // exportpipe::FlattenWriter
@@ -343,10 +348,14 @@ int main(int argc, char** argv)
     fc.fps = fps;
     fc.h265 = a.h265;
     fc.bitrate_kbps = a.bitrateKbps;
+    fc.vulkan_device = src->vulkanHwDevice(); // share the decode device if one
 
     exportpipe::FlattenWriter writer;
-    if (!writer.open(fc, err))
+    if (!writer.open(fc, err)) {
+        av_buffer_unref(&fc.vulkan_device);
         die(err);
+    }
+    av_buffer_unref(&fc.vulkan_device); // the encoder holds its own reference
 
     // --inset: output frame k is at k / fps on the output timeline.
     std::shared_ptr<exportpipe::InsetCompositor> insets;
@@ -378,10 +387,15 @@ int main(int argc, char** argv)
     // outW % 4 == 0 and outH % 2 == 0 (the shader's NV12 packing).
     const bool gpuFlat =
         src->GpuReframeAvailable() && (a.outW % 4) == 0 && (a.outH % 2) == 0;
+    // No host round-trip at all when the encoder shares the stitch device
+    // (fused view -> encoder-frame images on-device). Off when --inset set a
+    // frame hook, which needs CPU pixels.
+    const bool gpuVk = gpuFlat && writer.vulkanEncodeAvailable() && src->GpuViewAvailable();
     const char* encName = exportpipe::hwEncoderName(a.h265);
     std::printf("reproject: %s, encoder: %s\n",
-                gpuFlat ? "GPU (NV12 straight to the encoder)"
-                        : "CPU (multithreaded scanlines)",
+                gpuVk ? "GPU (NV12 straight into the encoder's frames)"
+                      : gpuFlat ? "GPU (NV12 straight to the encoder)"
+                                : "CPU (multithreaded scanlines)",
                 encName ? encName : "none");
 
     const double halfFrameMs = 500.0 / fps;
@@ -393,7 +407,29 @@ int main(int argc, char** argv)
                 ? &poses[static_cast<size_t>(std::min<int64_t>(written, poseCount - 1)) * 4]
                 : nullptr;
 
-        if (gpuFlat) {
+        if (gpuVk) {
+            AVFrame* vkFrame = writer.acquireVulkanFrame();
+            int64_t ptsMs = 0;
+            const bool got = vkFrame &&
+                src->ReadFlatFrameVk(a.outW, a.outH,
+                                     [pose](int64_t, float p[4], float[9]) {
+                                         if (pose)
+                                             std::copy(pose, pose + 4, p);
+                                     },
+                                     colorGrade, vkFrame, ptsMs);
+            if (!got) {
+                av_frame_free(&vkFrame);
+                if (!src->GetLastError().empty())
+                    die(src->GetLastError());
+                break; // clean end-of-clip
+            }
+            if (ptsMs + halfFrameMs < trimIn) {
+                av_frame_free(&vkFrame);
+                continue; // straggler ahead of the in-point
+            }
+            if (!writer.addVulkanFrame(vkFrame, err))
+                die(err);
+        } else if (gpuFlat) {
             stitch::FlatFrame ff = src->ReadFlatFrame(a.outW, a.outH, pose, nullptr, colorGrade);
             if (ff.nv12.empty()) {
                 if (!src->GetLastError().empty())
