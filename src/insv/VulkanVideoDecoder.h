@@ -39,6 +39,12 @@ namespace insv {
 
 using VulkanVideoStreamInfo = InsvStreamInfo;
 
+// A new reference to the process-wide Vulkan hw device every decoder (and
+// the adopted compute stitch) runs on, or nullptr when it can't be created.
+// Exported for the export path: a *_vulkan encoder on the same device can
+// consume flat frames with no host round-trip. Caller unrefs.
+AVBufferRef* sharedVulkanDevice();
+
 // One decoded fisheye frame's Vulkan handles, pulled from its AVVkFrame under
 // the frame lock (see lockFrame). Consumed by render::VulkanFisheyeStitcher.
 struct VulkanLensFrame {

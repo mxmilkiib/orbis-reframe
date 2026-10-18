@@ -46,11 +46,9 @@ void VulkanVideoDecoder::close()
         av_buffer_unref(&m_hwDevice);
 }
 
-namespace {
-
 // The process-wide Vulkan hw device (see the header). Created on first use
 // and kept for the process lifetime; returns a new reference, or nullptr.
-AVBufferRef* SharedHwDevice()
+AVBufferRef* sharedVulkanDevice()
 {
     static std::mutex mx;
     static AVBufferRef* device = nullptr;
@@ -59,6 +57,8 @@ AVBufferRef* SharedHwDevice()
         device = nullptr;
     return device ? av_buffer_ref(device) : nullptr;
 }
+
+namespace {
 
 // Whether the device has a video decode queue for `codec`. FFmpeg opens the
 // Vulkan hwaccel on any Vulkan device and only fails frame by frame ("Device
@@ -94,7 +94,7 @@ bool CanDecode(const AVBufferRef* hwDevice, AVCodecID codec)
 bool VulkanVideoDecoder::open(const std::string& path, std::string& err)
 {
     close();
-    m_hwDevice = SharedHwDevice();
+    m_hwDevice = sharedVulkanDevice();
     if (!m_hwDevice) {
         err = "no Vulkan hw device (FFmpeg built without Vulkan, or no driver support)";
         return false;
