@@ -35,6 +35,10 @@ struct InsvMakerNotes {
     // extended MEI calibration's fx/fy live in (5312 on the X5, 7680 on the
     // X6; docs/formats/insta360-x5.md §5.1). 0 when absent.
     double crop_dst_w = 0;
+    // Field 22 `gamma_mode` ("standard", "I_Log"; docs/formats/insta360-x6.md):
+    // the only marker of log recording -- the stream VUI reports bt709 either
+    // way. Empty when absent.
+    std::string gamma_mode;
 };
 
 // The profile named `name` in `notes`, or nullptr.

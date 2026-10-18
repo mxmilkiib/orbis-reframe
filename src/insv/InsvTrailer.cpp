@@ -410,6 +410,11 @@ std::optional<InsvMakerNotes> ReadInsvMakerNotes(const std::string& file_path) {
                 ParseLensProfiles(payload, result.lens_profiles);
                 WalkProtobuf(payload, [&](uint32_t f, int wt, uint64_t,
                                         const std::vector<uint8_t>& b) {
+                    if (f == 22 && wt == 2) {
+                        result.gamma_mode.assign(reinterpret_cast<const char*>(b.data()),
+                                                 b.size());
+                        return;
+                    }
                     if (f != 27 || wt != 2) return;
                     WalkProtobuf(b, [&](uint32_t g, int gwt, uint64_t gv,
                                         const std::vector<uint8_t>&) {
