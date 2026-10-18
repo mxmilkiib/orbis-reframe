@@ -20,7 +20,9 @@
 // Output (binding 3, uint px[]), 4 horizontal pixels per invocation, so outW
 // must be a multiple of 4 (and outH of 2 for NV12):
 //   fmt 0: tightly-packed BT.709 limited-range NV12 (export -> NVENC);
-//   fmt 1: RGBA8, one uint per pixel (viewport / stills / comparison).
+//   fmt 1: RGBA8, one uint per pixel (viewport / stills / comparison);
+//   fmt 2: P010 -- as NV12 but 16-bit samples (the 10-bit code << 6), two
+//          per uint (export -> Main 10 hardware encoders).
 
 layout(local_size_x = 16, local_size_y = 4) in;
 
@@ -103,6 +105,8 @@ float lumaY(vec3 c) { return 16.0 + 0.182586 * c.r + 0.614231 * c.g + 0.062007 *
 float chromaU(vec3 c) { return 128.0 - 0.100644 * c.r - 0.338572 * c.g + 0.439216 * c.b; }
 float chromaV(vec3 c) { return 128.0 + 0.439216 * c.r - 0.398942 * c.g - 0.040274 * c.b; }
 uint q8(float x) { return uint(clamp(x + 0.5, 0.0, 255.0)); }
+// The 8-bit-scale value x4 in the high bits of a 16-bit P010 sample.
+uint q16(float x) { return uint(clamp(x * 4.0 + 0.5, 0.0, 1023.0)) << 6; }
 
 void main()
 {
@@ -141,12 +145,20 @@ void main()
     }
 
     vec3 rgb[4];
-    uint y[4];
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 4; ++i)
         rgb[i] = shade(basePx + i, gid.y);
-        y[i] = q8(lumaY(rgb[i]));
+
+    if (pc.fmt == 2) {
+        // P010: one 16-bit word per luma sample (2 px per uint).
+        uint yb = uint(gid.y * pc.outW + basePx) / 2;
+        px[yb] = q16(lumaY(rgb[0])) | (q16(lumaY(rgb[1])) << 16);
+        px[yb + 1] = q16(lumaY(rgb[2])) | (q16(lumaY(rgb[3])) << 16);
+    } else {
+        uint y[4];
+        for (int i = 0; i < 4; ++i)
+            y[i] = q8(lumaY(rgb[i]));
+        px[gid.y * quads + gid.x] = y[0] | (y[1] << 8) | (y[2] << 16) | (y[3] << 24);
     }
-    px[gid.y * quads + gid.x] = y[0] | (y[1] << 8) | (y[2] << 16) | (y[3] << 24);
 
     // 4:2:0 chroma: even rows write one sample per 2x2 block, averaging this
     // row and the next.
@@ -158,9 +170,16 @@ void main()
         vec3 n3 = shade(basePx + 3, nextY);
         vec3 c0 = (rgb[0] + rgb[1] + n0 + n1) * 0.25;
         vec3 c1 = (rgb[2] + rgb[3] + n2 + n3) * 0.25;
-        uint u0 = q8(chromaU(c0)), v0 = q8(chromaV(c0));
-        uint u1 = q8(chromaU(c1)), v1 = q8(chromaV(c1));
-        int uvBase = pc.outH * quads;
-        px[uvBase + (gid.y >> 1) * quads + gid.x] = u0 | (v0 << 8) | (u1 << 16) | (v1 << 24);
+        if (pc.fmt == 2) {
+            // P010: a (u,v) pair is one uint -- u in the low word, v high.
+            uint uvb = uint(pc.outW * pc.outH + (gid.y >> 1) * pc.outW + basePx) / 2;
+            px[uvb] = q16(chromaU(c0)) | (q16(chromaV(c0)) << 16);
+            px[uvb + 1] = q16(chromaU(c1)) | (q16(chromaV(c1)) << 16);
+        } else {
+            uint u0 = q8(chromaU(c0)), v0 = q8(chromaV(c0));
+            uint u1 = q8(chromaU(c1)), v1 = q8(chromaV(c1));
+            int uvBase = pc.outH * quads;
+            px[uvBase + (gid.y >> 1) * quads + gid.x] = u0 | (v0 << 8) | (u1 << 16) | (v1 << 24);
+        }
     }
 }

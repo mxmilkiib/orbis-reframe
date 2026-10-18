@@ -39,6 +39,12 @@ struct Encoder {
     AVStream* stream = nullptr;
     SwsContext* toNv12 = nullptr;
     AVFrame* nv12 = nullptr;
+    // Main 10 output (FlattenConfig::ten_bit): the encoder's surfaces are
+    // P010, so CPU-side frames get widened by `toP010` into `p010` before
+    // the send / upload.
+    bool tenBit = false;
+    SwsContext* toP010 = nullptr;
+    AVFrame* p010 = nullptr;
     AVPacket* pkt = nullptr;
     // Hardware-surface encoders (Vulkan video, VAAPI): nv12 is uploaded into
     // `hw` before it's sent to the encoder. All nullptr when the encoder
@@ -72,6 +78,12 @@ void closeEncoder(Encoder& e)
         sws_freeContext(e.toNv12);
         e.toNv12 = nullptr;
     }
+    if (e.toP010) {
+        sws_freeContext(e.toP010);
+        e.toP010 = nullptr;
+    }
+    if (e.p010)
+        av_frame_free(&e.p010);
     if (e.nv12)
         av_frame_free(&e.nv12);
     if (e.pkt)
@@ -242,76 +254,99 @@ bool openEncoder(const FlattenConfig& p, Encoder& e, std::string& err)
         return false;
     }
 
-    e.ctx = avcodec_alloc_context3(enc);
-    e.ctx->width = p.out_w;
-    e.ctx->height = p.out_h;
-    const AVRational tb = av_d2q(1.0 / p.fps, 1000000);
-    e.ctx->time_base = tb;
-    e.ctx->framerate = av_inv_q(tb);
-    if (deviceType == AV_HWDEVICE_TYPE_NONE) {
-        e.ctx->pix_fmt = AV_PIX_FMT_NV12;
-    } else {
-        // *_vulkan / *_vaapi take hardware surfaces only; the NV12 frames are
-        // uploaded into `e.hw` before each send (drainEncoder). sw_pix_fmt
-        // tells the encoder what those surfaces carry.
-        e.ctx->pix_fmt = deviceType == AV_HWDEVICE_TYPE_VULKAN ? AV_PIX_FMT_VULKAN
-                                                             : AV_PIX_FMT_VAAPI;
-        e.ctx->sw_pix_fmt = AV_PIX_FMT_NV12;
-        e.ctx->hw_device_ctx = av_buffer_ref(e.hwDevice);
-        e.hwFrames = av_hwframe_ctx_alloc(e.hwDevice);
-        if (!e.hwFrames) {
-            err = "cannot allocate hardware frames context";
+    // HEVC Main 10 when asked (FlattenConfig::ten_bit): P010 input frames.
+    // An encoder or device without it is retried at 8-bit instead of failing.
+    e.tenBit = p.ten_bit && p.h265;
+    for (;;) {
+        const AVPixelFormat swFmt = e.tenBit ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
+        e.ctx = avcodec_alloc_context3(enc);
+        e.ctx->width = p.out_w;
+        e.ctx->height = p.out_h;
+        const AVRational tb = av_d2q(1.0 / p.fps, 1000000);
+        e.ctx->time_base = tb;
+        e.ctx->framerate = av_inv_q(tb);
+        if (deviceType == AV_HWDEVICE_TYPE_NONE) {
+            e.ctx->pix_fmt = swFmt;
+        } else {
+            // *_vulkan / *_vaapi take hardware surfaces only; the CPU frames
+            // are uploaded into `e.hw` before each send (drainEncoder).
+            // sw_pix_fmt tells the encoder what those surfaces carry.
+            e.ctx->pix_fmt = deviceType == AV_HWDEVICE_TYPE_VULKAN ? AV_PIX_FMT_VULKAN
+                                                                 : AV_PIX_FMT_VAAPI;
+            e.ctx->sw_pix_fmt = swFmt;
+            e.ctx->hw_device_ctx = av_buffer_ref(e.hwDevice);
+            e.hwFrames = av_hwframe_ctx_alloc(e.hwDevice);
+            if (!e.hwFrames) {
+                err = "cannot allocate hardware frames context";
+                return false;
+            }
+            auto* fc = reinterpret_cast<AVHWFramesContext*>(e.hwFrames->data);
+            fc->format = e.ctx->pix_fmt;
+            fc->sw_format = swFmt;
+            fc->width = p.out_w;
+            fc->height = p.out_h;
+            if (av_hwframe_ctx_init(e.hwFrames) < 0) {
+                if (!e.tenBit) {
+                    err = "init hardware frames context";
+                    return false;
+                }
+                av_buffer_unref(&e.hwFrames);
+                avcodec_free_context(&e.ctx);
+                e.tenBit = false;
+                continue;
+            }
+            // Vulkan video requires the frames context at open (VAAPI would
+            // derive one from the device); the uploaded frames come out of it.
+            e.ctx->hw_frames_ctx = av_buffer_ref(e.hwFrames);
+            e.hw = av_frame_alloc();
+            if (!e.hw) {
+                err = "cannot allocate hardware frame";
+                return false;
+            }
+        }
+        if (e.tenBit)
+            e.ctx->profile = AV_PROFILE_HEVC_MAIN_10;
+        // BT.709 limited range, matching reframe_reproject.comp and the swscale
+        // setup below; tagged so players don't have to guess.
+        e.ctx->color_range = AVCOL_RANGE_MPEG;
+        e.ctx->colorspace = AVCOL_SPC_BT709;
+        e.ctx->color_primaries = AVCOL_PRI_BT709;
+        e.ctx->color_trc = AVCOL_TRC_BT709;
+        e.ctx->bit_rate = p.bitrate_kbps * 1000;
+        // VBR peak headroom for busy scenes; the average stays at bit_rate.
+        e.ctx->rc_max_rate = e.ctx->bit_rate * 3 / 2;
+        e.ctx->gop_size = std::max(1, static_cast<int>(std::lround(p.fps)) * 2);
+        if (e.fmt->oformat->flags & AVFMT_GLOBALHEADER)
+            e.ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        if (deviceType == AV_HWDEVICE_TYPE_NONE) {
+            av_opt_set(e.ctx->priv_data, "preset", "p5", 0);
+            av_opt_set(e.ctx->priv_data, "tune", "hq", 0);
+            av_opt_set(e.ctx->priv_data, "rc", "vbr", 0);
+        } else if (deviceType == AV_HWDEVICE_TYPE_VULKAN) {
+            av_opt_set(e.ctx->priv_data, "rc_mode", "vbr", 0);
+            av_opt_set(e.ctx->priv_data, "tune", "hq", 0);
+            av_opt_set(e.ctx->priv_data, "usage", "transcode", 0);
+            av_opt_set(e.ctx->priv_data, "content", "camera", 0);
+        } else if (deviceType == AV_HWDEVICE_TYPE_VAAPI) {
+            av_opt_set(e.ctx->priv_data, "rc_mode", "VBR", 0);
+        }
+
+        int ret = avcodec_open2(e.ctx, enc, nullptr);
+        if (ret >= 0)
+            break;
+        if (!e.tenBit) {
+            err = avErr(std::string("open ") + encName, ret);
             return false;
         }
-        auto* fc = reinterpret_cast<AVHWFramesContext*>(e.hwFrames->data);
-        fc->format = e.ctx->pix_fmt;
-        fc->sw_format = AV_PIX_FMT_NV12;
-        fc->width = p.out_w;
-        fc->height = p.out_h;
-        if (av_hwframe_ctx_init(e.hwFrames) < 0) {
-            err = "init hardware frames context";
-            return false;
-        }
-        // Vulkan video requires the frames context at open (VAAPI would
-        // derive one from the device); the uploaded frames come out of it.
-        e.ctx->hw_frames_ctx = av_buffer_ref(e.hwFrames);
-        e.hw = av_frame_alloc();
-        if (!e.hw) {
-            err = "cannot allocate hardware frame";
-            return false;
-        }
-    }
-    // BT.709 limited range, matching reframe_reproject.comp and the swscale
-    // setup below; tagged so players don't have to guess.
-    e.ctx->color_range = AVCOL_RANGE_MPEG;
-    e.ctx->colorspace = AVCOL_SPC_BT709;
-    e.ctx->color_primaries = AVCOL_PRI_BT709;
-    e.ctx->color_trc = AVCOL_TRC_BT709;
-    e.ctx->bit_rate = p.bitrate_kbps * 1000;
-    // VBR peak headroom for busy scenes; the average stays at bit_rate.
-    e.ctx->rc_max_rate = e.ctx->bit_rate * 3 / 2;
-    e.ctx->gop_size = std::max(1, static_cast<int>(std::lround(p.fps)) * 2);
-    if (e.fmt->oformat->flags & AVFMT_GLOBALHEADER)
-        e.ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    if (deviceType == AV_HWDEVICE_TYPE_NONE) {
-        av_opt_set(e.ctx->priv_data, "preset", "p5", 0);
-        av_opt_set(e.ctx->priv_data, "tune", "hq", 0);
-        av_opt_set(e.ctx->priv_data, "rc", "vbr", 0);
-    } else if (deviceType == AV_HWDEVICE_TYPE_VULKAN) {
-        av_opt_set(e.ctx->priv_data, "rc_mode", "vbr", 0);
-        av_opt_set(e.ctx->priv_data, "tune", "hq", 0);
-        av_opt_set(e.ctx->priv_data, "usage", "transcode", 0);
-        av_opt_set(e.ctx->priv_data, "content", "camera", 0);
-    } else if (deviceType == AV_HWDEVICE_TYPE_VAAPI) {
-        av_opt_set(e.ctx->priv_data, "rc_mode", "VBR", 0);
+        if (e.hw)
+            av_frame_free(&e.hw);
+        if (e.hwFrames)
+            av_buffer_unref(&e.hwFrames);
+        avcodec_free_context(&e.ctx);
+        e.tenBit = false;
     }
 
-    int ret = avcodec_open2(e.ctx, enc, nullptr);
-    if (ret < 0) {
-        err = avErr(std::string("open ") + encName, ret);
-        return false;
-    }
-
+    int ret;
     e.stream = avformat_new_stream(e.fmt, nullptr);
     avcodec_parameters_from_context(e.stream->codecpar, e.ctx);
     e.stream->time_base = e.ctx->time_base;
@@ -375,6 +410,22 @@ bool openEncoder(const FlattenConfig& p, Encoder& e, std::string& err)
     // swscale's RGB->YUV default is BT.601; make it BT.709 limited range.
     const int* bt709 = sws_getCoefficients(SWS_CS_ITU709);
     sws_setColorspaceDetails(e.toNv12, bt709, 1, bt709, 0, 0, 1 << 16, 1 << 16);
+    if (e.tenBit) {
+        // CPU-side frames stay NV12 (the frame hook's format); widen to the
+        // encoder's P010 at send time.
+        e.p010 = av_frame_alloc();
+        e.p010->format = AV_PIX_FMT_P010LE;
+        e.p010->width = p.out_w;
+        e.p010->height = p.out_h;
+        av_frame_get_buffer(e.p010, 0);
+        e.toP010 = sws_getContext(p.out_w, p.out_h, AV_PIX_FMT_NV12, p.out_w, p.out_h,
+                                  AV_PIX_FMT_P010LE, SWS_BILINEAR, nullptr, nullptr, nullptr);
+        if (!e.toP010) {
+            err = "cannot create NV12->P010 scaler";
+            return false;
+        }
+        sws_setColorspaceDetails(e.toP010, bt709, 0, bt709, 0, 0, 1 << 16, 1 << 16);
+    }
     return true;
 }
 
@@ -403,10 +454,21 @@ bool drainTo(Encoder& e, AVCodecContext* ctx, AVStream* stream, AVFrame* frame, 
     return true;
 }
 
-// Send `frame` (nullptr => flush) to the video encoder. When it wants
-// hardware surfaces the NV12 frame is uploaded into `e.hw` first.
+// Send `frame` (nullptr => flush) to the video encoder. For Main 10 the
+// CPU-side NV12 is widened into the P010 staging frame first, and when the
+// encoder wants hardware surfaces it is uploaded into `e.hw`.
 bool drainEncoder(Encoder& e, AVFrame* frame, std::string& err)
 {
+    if (frame && e.toP010) {
+        int ret = sws_scale(e.toP010, reinterpret_cast<const uint8_t* const*>(frame->data),
+                            frame->linesize, 0, frame->height, e.p010->data, e.p010->linesize);
+        if (ret < 0) {
+            err = avErr("NV12->P010 scale", ret);
+            return false;
+        }
+        av_frame_copy_props(e.p010, frame);
+        frame = e.p010;
+    }
     if (frame && e.hw) {
         av_frame_unref(e.hw);
         int ret = av_hwframe_get_buffer(e.hwFrames, e.hw, 0);
@@ -570,6 +632,12 @@ bool FlattenWriter::addNv12Frame(const uint8_t* nv12, int w, int h, std::string&
 bool FlattenWriter::vulkanEncodeAvailable() const
 {
     return d->opened && d->enc.sharedDevice && !d->hook;
+}
+
+// True when the encoder opened for Main 10 (FlattenConfig::ten_bit honored).
+bool FlattenWriter::tenBit() const
+{
+    return d->opened && d->enc.tenBit;
 }
 
 AVFrame* FlattenWriter::acquireVulkanFrame()
