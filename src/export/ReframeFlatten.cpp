@@ -6,6 +6,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/hwcontext_vulkan.h>
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
 }
@@ -45,6 +46,10 @@ struct Encoder {
     AVBufferRef* hwDevice = nullptr;
     AVBufferRef* hwFrames = nullptr;
     AVFrame* hw = nullptr;
+    // True when hwDevice is FlattenConfig::vulkan_device -- frames the
+    // caller's GPU pipeline fills on that device can go straight to the
+    // encoder (acquireVulkanFrame / addVulkanFrame).
+    bool sharedDevice = false;
     // Optional AAC audio stream (FlattenConfig::audio_sample_rate > 0).
     AVCodecContext* actx = nullptr;
     AVStream* astream = nullptr;
@@ -133,20 +138,46 @@ AVHWDeviceType deviceFor(const char* encName)
     return AV_HWDEVICE_TYPE_NONE;
 }
 
+// Whether `hwDevice` has a video encode queue for `h265 ? HEVC : H264` --
+// FlattenConfig::vulkan_device comes from the decode path, which only needs
+// a decode queue, so a device could decode yet not encode.
+bool vulkanCanEncode(const AVBufferRef* hwDevice, bool h265)
+{
+    const VkVideoCodecOperationFlagsKHR op = h265
+        ? static_cast<VkVideoCodecOperationFlagsKHR>(VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_KHR)
+        : static_cast<VkVideoCodecOperationFlagsKHR>(VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_KHR);
+    const auto* dctx = reinterpret_cast<const AVHWDeviceContext*>(hwDevice->data);
+    const auto* vk = static_cast<const AVVulkanDeviceContext*>(dctx->hwctx);
+    for (int i = 0; i < vk->nb_qf; ++i)
+        if ((vk->qf[i].flags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) && (vk->qf[i].video_caps & op))
+            return true;
+    return false;
+}
+
 // Whether `encName` can run on this machine: the encoder exists in this
 // FFmpeg, plus NVENC's driver library or -- for the hardware-surface
-// encoders -- a device it can use. When `deviceOut` is given the working
-// device is handed back (caller unrefs) for the encoder to run on.
-bool encoderUsable(const char* encName, AVBufferRef** deviceOut)
+// encoders -- a device it can use. `preferred` (FlattenConfig's
+// vulkan_device) is used for a *_vulkan encoder when it can encode, so the
+// encode lands on the device the decode / stitch path already runs on.
+// When `deviceOut` is given the working device is handed back (caller
+// unrefs) for the encoder to run on.
+bool encoderUsable(const char* encName, bool h265, AVBufferRef* preferred,
+                   AVBufferRef** deviceOut, bool* usedShared = nullptr)
 {
     if (!avcodec_find_encoder_by_name(encName))
         return false;
     const AVHWDeviceType dev = deviceFor(encName);
     if (dev == AV_HWDEVICE_TYPE_NONE)
         return nvencLibraryPresent();
-    AVBufferRef* hw = nullptr;
-    if (av_hwdevice_ctx_create(&hw, dev, nullptr, nullptr, 0) < 0)
+    AVBufferRef* hw;
+    const bool shared = preferred && dev == AV_HWDEVICE_TYPE_VULKAN &&
+                        vulkanCanEncode(preferred, h265);
+    if (shared)
+        hw = av_buffer_ref(preferred);
+    else if (av_hwdevice_ctx_create(&hw, dev, nullptr, nullptr, 0) < 0)
         return false;
+    if (usedShared)
+        *usedShared = shared;
     if (deviceOut)
         *deviceOut = hw;
     else
@@ -163,7 +194,7 @@ const char* pickedEncoder(bool h265)
         for (int codec = 0; codec < 2; ++codec)
             for (int i = 0; i < encoderNameCount(); ++i) {
                 const char* name = encoderNames(codec)[i];
-                if (encoderUsable(name, nullptr)) {
+                if (encoderUsable(name, codec == 1, nullptr, nullptr)) {
                     picked[codec] = name;
                     break;
                 }
@@ -192,7 +223,7 @@ bool openEncoder(const FlattenConfig& p, Encoder& e, std::string& err)
     const char* encName = nullptr;
     for (int i = 0; i < encoderNameCount(); ++i) {
         const char* name = encoderNames(p.h265)[i];
-        if (encoderUsable(name, &e.hwDevice)) {
+        if (encoderUsable(name, p.h265, p.vulkan_device, &e.hwDevice, &e.sharedDevice)) {
             enc = avcodec_find_encoder_by_name(name);
             encName = name;
             break;
@@ -531,6 +562,39 @@ bool FlattenWriter::addNv12Frame(const uint8_t* nv12, int w, int h, std::string&
         return false;
     d->enc.nv12->pts = d->written;
     if (!drainEncoder(d->enc, d->enc.nv12, err))
+        return false;
+    ++d->written;
+    return true;
+}
+
+bool FlattenWriter::vulkanEncodeAvailable() const
+{
+    return d->opened && d->enc.sharedDevice && !d->hook;
+}
+
+AVFrame* FlattenWriter::acquireVulkanFrame()
+{
+    if (!vulkanEncodeAvailable())
+        return nullptr;
+    AVFrame* f = av_frame_alloc();
+    if (!f || av_hwframe_get_buffer(d->enc.hwFrames, f, 0) < 0) {
+        av_frame_free(&f);
+        return nullptr;
+    }
+    return f;
+}
+
+bool FlattenWriter::addVulkanFrame(AVFrame* frame, std::string& err)
+{
+    if (!vulkanEncodeAvailable()) {
+        err = "addVulkanFrame needs a *_vulkan encoder on the caller's hw device";
+        av_frame_free(&frame);
+        return false;
+    }
+    frame->pts = d->written;
+    const bool ok = drainTo(d->enc, d->enc.ctx, d->enc.stream, frame, err);
+    av_frame_free(&frame);
+    if (!ok)
         return false;
     ++d->written;
     return true;
