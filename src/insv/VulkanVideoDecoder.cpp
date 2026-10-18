@@ -122,13 +122,15 @@ bool VulkanVideoDecoder::open(const std::string& path, std::string& err)
 }
 
 void VulkanVideoDecoder::deviceHandles(VkInstance& inst, VkPhysicalDevice& phys, VkDevice& dev,
-                                       uint32_t& computeQueueFamily) const
+                                       uint32_t& computeQueueFamily,
+                                       VkDeviceQueueCreateFlags& queueFlags) const
 {
     auto* dctx = reinterpret_cast<AVHWDeviceContext*>(m_hwDevice->data);
     auto* vk = reinterpret_cast<AVVulkanDeviceContext*>(dctx->hwctx);
     inst = vk->inst;
     phys = vk->phys_dev;
     dev = vk->act_dev;
+    queueFlags = vk->queue_flags;
     computeQueueFamily = UINT32_MAX;
     for (int i = 0; i < vk->nb_qf; ++i) {
         if (vk->qf[i].flags & VK_QUEUE_COMPUTE_BIT) {

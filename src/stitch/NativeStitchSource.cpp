@@ -153,10 +153,11 @@ bool NativeStitchSource::Open(const std::string& clip_path, const PreviewStitchC
             VkPhysicalDevice phys = VK_NULL_HANDLE;
             VkDevice dev = VK_NULL_HANDLE;
             uint32_t qf = 0;
-            vdec->deviceHandles(inst, phys, dev, qf);
+            VkDeviceQueueCreateFlags qflags = 0;
+            vdec->deviceHandles(inst, phys, dev, qf, qflags);
             auto gpu = std::make_unique<render::VulkanFisheyeStitcher>();
             std::string gerr;
-            if (gpu->initAdopt(inst, phys, dev, qf, gerr)) {
+            if (gpu->initAdopt(inst, phys, dev, qf, qflags, gerr)) {
                 auto ql = vdec->queueLock(qf, 0);
                 gpu->setQueueLock(std::move(ql.lock), std::move(ql.unlock));
                 gpu->setDeviceKeepAlive(vdec->deviceKeepAlive());

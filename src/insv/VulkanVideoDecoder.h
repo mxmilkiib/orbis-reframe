@@ -73,9 +73,13 @@ public:
     int lensCount() const { return m_demux.lensCount(); }
     const VulkanVideoStreamInfo& lens(int i) const { return m_demux.lens(i); }
 
-    // FFmpeg's Vulkan device, for the compute stitch to adopt. Valid after open().
+    // FFmpeg's Vulkan device, for the compute stitch to adopt. `queueFlags`
+    // are the flags FFmpeg created its queues with
+    // (AVVulkanDeviceContext::queue_flags -- can be PROTECTED, which makes
+    // vkGetDeviceQueue return NULL; retrieve with vkGetDeviceQueue2).
+    // Valid after open().
     void deviceHandles(VkInstance& inst, VkPhysicalDevice& phys, VkDevice& dev,
-                       uint32_t& computeQueueFamily) const;
+                       uint32_t& computeQueueFamily, VkDeviceQueueCreateFlags& queueFlags) const;
 
     // Frame-exact: the next readNextPair returns the frame at `timestampMs`.
     // A target a little ahead, with no keyframe since the last pair read,

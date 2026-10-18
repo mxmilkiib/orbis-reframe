@@ -76,7 +76,8 @@ void benchDecode(const std::string& path, int frames, double fps) {
     VkPhysicalDevice phys;
     VkDevice dev;
     uint32_t qf;
-    dec.deviceHandles(inst, phys, dev, qf);
+    VkDeviceQueueCreateFlags qflags;
+    dec.deviceHandles(inst, phys, dev, qf, qflags);
 
     int n = 0;
     Clock::time_point t0;

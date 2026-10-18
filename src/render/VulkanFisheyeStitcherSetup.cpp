@@ -519,7 +519,8 @@ bool VulkanFisheyeStitcher::init(std::string& err)
 }
 
 bool VulkanFisheyeStitcher::initAdopt(VkInstance inst, VkPhysicalDevice phys, VkDevice dev,
-                                      uint32_t computeQueueFamily, std::string& err)
+                                      uint32_t computeQueueFamily,
+                                      VkDeviceQueueCreateFlags queueFlags, std::string& err)
 {
     d->adopted = true;
     d->instance = inst;
@@ -527,7 +528,21 @@ bool VulkanFisheyeStitcher::initAdopt(VkInstance inst, VkPhysicalDevice phys, Vk
     d->device = dev;
     d->queueFamily = computeQueueFamily;
     vkGetPhysicalDeviceMemoryProperties(d->phys, &d->memProps);
-    vkGetDeviceQueue(d->device, d->queueFamily, 0, &d->queue);
+    if (queueFlags) {
+        // FFmpeg created its queues with these flags (PROTECTED on some
+        // driver/FFmpeg pairs) -- vkGetDeviceQueue would return NULL.
+        VkDeviceQueueInfo2 qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2};
+        qi.flags = queueFlags;
+        qi.queueFamilyIndex = d->queueFamily;
+        qi.queueIndex = 0;
+        vkGetDeviceQueue2(d->device, &qi, &d->queue);
+    } else {
+        vkGetDeviceQueue(d->device, d->queueFamily, 0, &d->queue);
+    }
+    if (!d->queue) {
+        err = "no compute queue on FFmpeg's device";
+        return false;
+    }
     // Present when FFmpeg enabled VK_KHR_external_memory_fd (it does, for its
     // own interop); null => no lens export, playback stays on the equirect.
     d->getMemoryFd =
@@ -633,11 +648,14 @@ bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, std::string& err)
     vkCreateDescriptorSetLayout(d->device, &sli, nullptr, &d->setLayout);
 
     // Two sets of this layout: the stitch's, and the fused view pass's.
-    VkDescriptorPoolSize ps[3]{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
-                               {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4},
-                               {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6}};
+    // Sized with headroom -- RADV accounts the ycbcr-conversion immutable
+    // samplers as more than one descriptor internally and runs out of a
+    // minimally-sized pool (OUT_OF_POOL_MEMORY on the second set).
+    VkDescriptorPoolSize ps[3]{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4},
+                               {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8},
+                               {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12}};
     VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    dpi.maxSets = 2;
+    dpi.maxSets = 4;
     dpi.poolSizeCount = 3;
     dpi.pPoolSizes = ps;
     vkCreateDescriptorPool(d->device, &dpi, nullptr, &d->descPool);
@@ -777,8 +795,9 @@ bool VulkanFisheyeStitcher::buildViewPipeline(std::string& err)
     dsi.descriptorPool = d->descPool;
     dsi.descriptorSetCount = 1;
     dsi.pSetLayouts = &d->setLayout;
-    if (vkAllocateDescriptorSets(d->device, &dsi, &d->vwSet) != VK_SUCCESS) {
-        err = "vkAllocateDescriptorSets (view) failed";
+    const VkResult ar = vkAllocateDescriptorSets(d->device, &dsi, &d->vwSet);
+    if (ar != VK_SUCCESS) {
+        err = "vkAllocateDescriptorSets (view) failed, VkResult " + std::to_string(ar);
         return false;
     }
 
