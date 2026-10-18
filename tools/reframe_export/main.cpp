@@ -5,7 +5,8 @@
 // Open the clip with stitch::NativeStitchSource (trailer calibration ->
 // Vulkan video decode -> Vulkan compute stitch), read the trimmed range frame
 // by frame, and reproject each frame at its baked pose (on the GPU when it
-// can, else the CPU) into exportpipe::FlattenWriter -> NVENC. No
+// can, else the CPU) into exportpipe::FlattenWriter -> the hardware encoder
+// (NVENC, Vulkan video or VAAPI, whichever this machine can run). No
 // intermediate file.
 //
 // The --keys file stands in for a clip's ReframeTrack: it is loaded into a real
@@ -351,13 +352,16 @@ int main(int argc, char** argv)
     }
 
     // GPU reproject: when the all-GPU stitch path is active, reproject the
-    // equirect to NV12 on the GPU and hand it straight to NVENC -- no CPU
-    // equirect->rectilinear pass, no RGBA->NV12 swscale. Needs outW % 4 == 0
-    // and outH % 2 == 0 (the shader's NV12 packing).
+    // equirect to NV12 on the GPU and hand it straight to the encoder -- no
+    // CPU equirect->rectilinear pass, no RGBA->NV12 swscale. Needs
+    // outW % 4 == 0 and outH % 2 == 0 (the shader's NV12 packing).
     const bool gpuFlat =
         src->GpuReframeAvailable() && (a.outW % 4) == 0 && (a.outH % 2) == 0;
-    std::printf("reproject: %s\n",
-                gpuFlat ? "GPU (NV12 straight to NVENC)" : "CPU (multithreaded scanlines)");
+    const char* encName = exportpipe::hwEncoderName(a.h265);
+    std::printf("reproject: %s, encoder: %s\n",
+                gpuFlat ? "GPU (NV12 straight to the encoder)"
+                        : "CPU (multithreaded scanlines)",
+                encName ? encName : "none");
 
     const double halfFrameMs = 500.0 / fps;
     int lastPct = -1;

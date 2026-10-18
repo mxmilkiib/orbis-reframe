@@ -93,12 +93,35 @@ bool nvencLibraryPresent()
 }
 
 // The encoder names openEncoder() tries, in order: NVENC, then Vulkan video
-// (the same API the decode path already uses), then VAAPI.
+// (the same API the decode path already uses), then VAAPI. ORBIS_ENCODER
+// ("nvenc" / "vulkan" / "vaapi") restricts the choice to one backend.
 const char* const* encoderNames(bool h265)
 {
     static const char* const h264[] = {"h264_nvenc", "h264_vulkan", "h264_vaapi"};
     static const char* const hevc[] = {"hevc_nvenc", "hevc_vulkan", "hevc_vaapi"};
+    static const char* const h264vk[] = {"h264_vulkan"};
+    static const char* const hevcvk[] = {"hevc_vulkan"};
+    static const char* const h264va[] = {"h264_vaapi"};
+    static const char* const hevcva[] = {"hevc_vaapi"};
+    static const char* const h264nv[] = {"h264_nvenc"};
+    static const char* const hevcnv[] = {"hevc_nvenc"};
+    const char* only = std::getenv("ORBIS_ENCODER");
+    if (only) {
+        if (!std::strcmp(only, "vulkan")) return h265 ? hevcvk : h264vk;
+        if (!std::strcmp(only, "vaapi"))  return h265 ? hevcva : h264va;
+        if (!std::strcmp(only, "nvenc"))  return h265 ? hevcnv : h264nv;
+    }
     return h265 ? hevc : h264;
+}
+
+// How many names encoderNames() can hand out (ORBIS_ENCODER narrows it to 1).
+int encoderNameCount()
+{
+    const char* only = std::getenv("ORBIS_ENCODER");
+    if (only && (!std::strcmp(only, "vulkan") || !std::strcmp(only, "vaapi") ||
+                 !std::strcmp(only, "nvenc")))
+        return 1;
+    return 3;
 }
 
 AVHWDeviceType deviceFor(const char* encName)
@@ -138,7 +161,7 @@ const char* pickedEncoder(bool h265)
     static std::once_flag once;
     std::call_once(once, [] {
         for (int codec = 0; codec < 2; ++codec)
-            for (int i = 0; i < 3; ++i) {
+            for (int i = 0; i < encoderNameCount(); ++i) {
                 const char* name = encoderNames(codec)[i];
                 if (encoderUsable(name, nullptr)) {
                     picked[codec] = name;
@@ -167,7 +190,7 @@ bool openEncoder(const FlattenConfig& p, Encoder& e, std::string& err)
 {
     const AVCodec* enc = nullptr;
     const char* encName = nullptr;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < encoderNameCount(); ++i) {
         const char* name = encoderNames(p.h265)[i];
         if (encoderUsable(name, &e.hwDevice)) {
             enc = avcodec_find_encoder_by_name(name);
@@ -176,7 +199,8 @@ bool openEncoder(const FlattenConfig& p, Encoder& e, std::string& err)
         }
     }
     if (!enc) {
-        err = "no usable hardware encoder (tried NVENC, Vulkan video and VAAPI)";
+        err = "no usable hardware encoder (tried NVENC, Vulkan video and VAAPI"
+              " - ORBIS_ENCODER=narrows the list)";
         return false;
     }
     const AVHWDeviceType deviceType = deviceFor(encName);
