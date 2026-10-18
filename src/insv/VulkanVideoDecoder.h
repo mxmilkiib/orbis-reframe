@@ -87,6 +87,12 @@ public:
     void deviceHandles(VkInstance& inst, VkPhysicalDevice& phys, VkDevice& dev,
                        uint32_t& computeQueueFamily, VkDeviceQueueCreateFlags& queueFlags) const;
 
+    // The VkFormat decoded frames will carry (from the frames context's
+    // format[0]), learned by peeking at the first decoded frame of lens 0.
+    // UNDEFINED if no frame can be decoded yet. The first frame stays queued
+    // for a normal read -- nothing is consumed.
+    VkFormat frameFormat();
+
     // Frame-exact: the next readNextPair returns the frame at `timestampMs`.
     // A target a little ahead, with no keyframe since the last pair read,
     // decodes forward from there instead of from the keyframe again.

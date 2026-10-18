@@ -81,6 +81,11 @@ public:
     // owns it. False as readNextPair.
     bool readNextFrame(int lens, AVFrame*& out, std::string& err);
 
+    // Lens `lens`'s next decoded frame without consuming it (pumps the fifo
+    // as needed); nullptr at EOS or on error. For reading frame properties
+    // before playback -- the frame is still handed out by the next read.
+    AVFrame* peekFrame(int lens);
+
 private:
     void clearFifos();
     void resetDecoders(); // flush + clear fifos, keep contexts
