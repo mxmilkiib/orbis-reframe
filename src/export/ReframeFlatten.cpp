@@ -266,6 +266,13 @@ bool openEncoder(const FlattenConfig& p, Encoder& e, std::string& err)
         av_opt_set(e.ctx->priv_data, "preset", "p5", 0);
         av_opt_set(e.ctx->priv_data, "tune", "hq", 0);
         av_opt_set(e.ctx->priv_data, "rc", "vbr", 0);
+    } else if (deviceType == AV_HWDEVICE_TYPE_VULKAN) {
+        av_opt_set(e.ctx->priv_data, "rc_mode", "vbr", 0);
+        av_opt_set(e.ctx->priv_data, "tune", "hq", 0);
+        av_opt_set(e.ctx->priv_data, "usage", "transcode", 0);
+        av_opt_set(e.ctx->priv_data, "content", "camera", 0);
+    } else if (deviceType == AV_HWDEVICE_TYPE_VAAPI) {
+        av_opt_set(e.ctx->priv_data, "rc_mode", "VBR", 0);
     }
 
     int ret = avcodec_open2(e.ctx, enc, nullptr);
