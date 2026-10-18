@@ -138,6 +138,23 @@ public:
 
     enum class ViewFormat { Nv12, Rgba };
 
+    // A caller-owned NV12 image the fused view fills on-device instead of
+    // reading back to the host: the fields of FFmpeg's AVVkFrame. `nbImages`
+    // is 1 for a multi-plane image (the usual NV12 case, the two planes
+    // addressed by aspect) or 2 for separate Y / CbCr images. `layout` and
+    // `access` are the image's current state; both are updated. `sem` /
+    // `semValue` are its timeline semaphore and value: the submission waits
+    // on `sem` at `semValue`, signals `semValue` + 1, and `semValue` is
+    // bumped. Same-device only -- the work runs on the adopted device.
+    struct FlatImageTarget {
+        int nbImages = 0;
+        VkImage img[2] = {};
+        VkImageLayout layout[2] = {};
+        VkAccessFlagBits2 access[2] = {};
+        VkSemaphore sem[2] = {};
+        uint64_t semValue[2] = {};
+    };
+
     // Fused render: the outW x outH rectilinear view straight from the
     // NV12 fisheye pair -- no equirect. Each output pixel's view ray (`pose`,
     // then `stab`, as stitchAndReframeVk) samples the lenses directly, so it
@@ -152,6 +169,17 @@ public:
                       int outH, const float pose[4], const float stab[9],
                       const color::Grade* colorGrade, ViewFormat fmt, std::vector<uint8_t>& out,
                       VulkanLensOutcome* r0, VulkanLensOutcome* r1, std::string& err);
+
+    // As renderViewVk (fmt Nv12, one view), but the NV12 goes into `dst`'s
+    // image(s) on-device -- no host read-back. For feeding a *_vulkan
+    // encoder's frame pool directly. `colorGrade` (nullptr => neutral) is
+    // the Colour panel grade, its LUT included. Requires viewReady().
+    bool renderViewVkToImage(const VulkanLensInput& f0, const VulkanLensInput& f1,
+                             const insv::StitchGpuParams& params, int measureW,
+                             int measureH, int outW, int outH, const float pose[4],
+                             const float stab[9], const color::Grade* colorGrade,
+                             FlatImageTarget& dst, VulkanLensOutcome* r0,
+                             VulkanLensOutcome* r1, std::string& err);
 
     // Several RGBA views of one pair in one submission, into one
     // canvasW x canvasH RGBA8 buffer (rows canvasW pixels long), cleared to
@@ -213,7 +241,8 @@ private:
                          const insv::StitchGpuParams& params, int measureW, int measureH,
                          int canvasW, int canvasH, const std::vector<ViewRect>& views,
                          const float stab[9], const color::Grade* colorGrade, ViewFormat fmt,
-                         const uint32_t* clear, std::vector<uint8_t>& out, VulkanLensOutcome* r0,
+                         const uint32_t* clear, std::vector<uint8_t>& out,
+                         FlatImageTarget* img, VulkanLensOutcome* r0,
                          VulkanLensOutcome* r1, std::string& err);
 
     struct Impl;
