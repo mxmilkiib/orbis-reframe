@@ -327,6 +327,9 @@ int main(int argc, char** argv)
     fc.fps = fps;
     fc.h265 = a.h265;
     fc.bitrate_kbps = a.bitrateKbps;
+    // A 10-bit source (the X6's HEVC Main 10) gets a Main 10 export; the
+    // writer falls back to 8-bit when the encoder can't take P010.
+    fc.ten_bit = a.h265 && src->SourceBitDepth() > 8;
     fc.vulkan_device = src->vulkanHwDevice(); // share the decode device if one
 
     exportpipe::FlattenWriter writer;
@@ -371,11 +374,12 @@ int main(int argc, char** argv)
     // frame hook, which needs CPU pixels.
     const bool gpuVk = gpuFlat && writer.vulkanEncodeAvailable() && src->GpuViewAvailable();
     const char* encName = exportpipe::hwEncoderName(a.h265);
-    std::printf("reproject: %s, encoder: %s\n",
-                gpuVk ? "GPU (NV12 straight into the encoder's frames)"
-                      : gpuFlat ? "GPU (NV12 straight to the encoder)"
+    std::printf("reproject: %s, encoder: %s%s\n",
+                gpuVk ? "GPU (YUV straight into the encoder's frames)"
+                      : gpuFlat ? "GPU (YUV straight to the encoder)"
                                 : "CPU (multithreaded scanlines)",
-                encName ? encName : "none");
+                encName ? encName : "none",
+                writer.tenBit() ? ", main10" : "");
 
     const double halfFrameMs = 500.0 / fps;
     int lastPct = -1;

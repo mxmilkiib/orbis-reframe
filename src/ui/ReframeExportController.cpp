@@ -178,6 +178,18 @@ void ReframeExportController::run(const Request &req)
     // ReadFlatFrameVk path below). Unset when the machine has no Vulkan.
     AVBufferRef* sharedVkDev = insv::sharedVulkanDevice();
     cfg.vulkan_device = sharedVkDev;
+    // 10-bit sources (the X6's HEVC Main 10) get a Main 10 export; the writer
+    // falls back to 8-bit when the encoder can't take P010.
+    for (const ClipJob &cj : req.clips) {
+        if (cj.flat)
+            continue;
+        stitch::ClipProbe probe0;
+        std::string perr0;
+        if (stitch::ProbeClip(cj.clipPath.toStdString(), probe0, perr0) &&
+            probe0.bitDepth > 8 && req.h265)
+            cfg.ten_bit = true;
+        break;
+    }
 
     std::string err;
     const double outFrameMs = 1000.0 / req.fps;
