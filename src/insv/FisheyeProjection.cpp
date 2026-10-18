@@ -70,7 +70,9 @@ bool ApplyLensProfile(StitchParams& params, const InsvMakerNotes& notes,
                       const std::string& accessoryName)
 {
     params.accessory = false;
-    params.logInput = notes.gamma_mode == "I_Log";
+    params.gammaMode = notes.gamma_mode == "I_Log"         ? 1
+                       : notes.gamma_mode == "Dolby_Vision" ? 2
+                                                            : 0;
     if (notes.crop_dst_w > 0)
         params.cropRefW = notes.crop_dst_w;
     const LensProfile* bare = FindLensProfile(notes, "bare");
@@ -289,7 +291,7 @@ StitchGpuParams FisheyeStitcher::gpuParams() const
     }
     p.halfBaseline = static_cast<float>(m_halfBaseline);
     p.depthRampRad = static_cast<float>(m_params.depthRampDeg * kDeg);
-    p.logInput = m_params.logInput ? 1 : 0;
+    p.gammaMode = m_params.gammaMode;
     return p;
 }
 
@@ -397,8 +399,8 @@ double FisheyeStitcher::seamBlendWeight(int lens, const Vec3& dir) const
 }
 
 namespace {
-// I-Log -> BT.709 for StitchParams::logInput (maker notes gamma_mode "I_Log").
-// The June-2026 Insta360 white-paper curve maps a code value to linear
+// Transfer decodes for StitchParams::gammaMode (maker notes 0x101 field 22).
+// The June-2026 Insta360 white-paper I-Log curve maps a code value to linear
 // reflectance on BT.2020 primaries; a gamut matrix and the BT.709 OETF bring
 // it to ordinary display-encoded RGB. In/out are [0,255]-scaled channels.
 float decodeILog(float v01)
@@ -413,16 +415,47 @@ float oetf709(float l)
 {
     return l < 0.018f ? 4.5f * l : 1.099f * std::pow(l, 0.45f) - 0.099f;
 }
+// BT.2020 -> BT.709 primaries (both D65), then the BT.709 OETF, on linear
+// channels and back to the [0,255] scale.
+void lin2020To709(float* l)
+{
+    const float r = 1.660491f * l[0] - 0.587641f * l[1] - 0.072850f * l[2];
+    const float g = -0.124550f * l[0] + 1.132900f * l[1] - 0.008349f * l[2];
+    const float b = -0.018151f * l[0] - 0.100579f * l[1] + 1.118730f * l[2];
+    l[0] = oetf709(std::max(r, 0.0f)) * 255.0f;
+    l[1] = oetf709(std::max(g, 0.0f)) * 255.0f;
+    l[2] = oetf709(std::max(b, 0.0f)) * 255.0f;
+}
 void ilogTo709(std::array<float, 3>& rgb)
 {
     float l[3] = {decodeILog(rgb[0] / 255.0f), decodeILog(rgb[1] / 255.0f),
                   decodeILog(rgb[2] / 255.0f)};
-    // BT.2020 -> BT.709 primaries (both D65).
-    const float r = 1.660491f * l[0] - 0.587641f * l[1] - 0.072850f * l[2];
-    const float g = -0.124550f * l[0] + 1.132900f * l[1] - 0.008349f * l[2];
-    const float b = -0.018151f * l[0] - 0.100579f * l[1] + 1.118730f * l[2];
-    rgb = {oetf709(std::max(r, 0.0f)) * 255.0f, oetf709(std::max(g, 0.0f)) * 255.0f,
-           oetf709(std::max(b, 0.0f)) * 255.0f};
+    lin2020To709(l);
+    rgb = {l[0], l[1], l[2]};
+}
+// HLG -> BT.709 for gamma_mode "Dolby_Vision" (the stream tags BT.2020 +
+// arib-std-b67): the inverse OETF gives scene light on BT.2020 primaries,
+// the BT.2100 OOTF at the SDR target's system gamma (1.2 + 0.42*log10(0.1)
+// = 0.78 at 100 nits) makes it display-referred, then the shared gamut map
+// + OETF encode it as SDR.
+float decodeHlg(float e)
+{
+    // inverse OETF: e <= 0.5 ? e^2/3 : (exp((e - c)/a) + b)/12
+    //               with a = 0.17883277, b = 0.28466892, c = 0.55991073
+    return e <= 0.5f ? (e * e) / 3.0f
+                     : (std::exp((e - 0.55991073f) / 0.17883277f) + 0.28466892f) / 12.0f;
+}
+void hlgTo709(std::array<float, 3>& rgb)
+{
+    float l[3] = {decodeHlg(rgb[0] / 255.0f), decodeHlg(rgb[1] / 255.0f),
+                  decodeHlg(rgb[2] / 255.0f)};
+    // OOTF: scale the channels by Ys^(gamma-1), gamma = 0.78 for 100 nits.
+    const float ys = std::max(0.2627f * l[0] + 0.6780f * l[1] + 0.0593f * l[2], 1e-6f);
+    const float ootf = std::pow(ys, -0.22f);
+    for (int i = 0; i < 3; ++i)
+        l[i] *= ootf;
+    lin2020To709(l);
+    rgb = {l[0], l[1], l[2]};
 }
 } // namespace
 
@@ -458,11 +491,13 @@ void FisheyeStitcher::renderEquirect(const Image& lens0, const Image& lens1, Ima
         return w > 0.0;
     };
 
-    // Lens pixel at (u,v), decoded to BT.709 when the clip is I-Log.
+    // Lens pixel at (u,v), decoded to BT.709 for log/HDR source modes.
     auto pix = [&](int i, double u, double v) {
         auto s = lim[i]->sample(u, v);
-        if (m_params.logInput)
+        if (m_params.gammaMode == 1)
             ilogTo709(s);
+        else if (m_params.gammaMode == 2)
+            hlgTo709(s);
         return s;
     };
 

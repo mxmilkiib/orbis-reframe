@@ -30,15 +30,20 @@ what our code assumes. Written as differences from the X5
 ## Colour: 10-bit, log and HDR
 
 - 📖 Colour modes Standard, **Dolby Vision** and **I-Log 10-bit**.
-- ✅ Every sample clip is H.265 Main 10 (`yuv420p10le`), VUI-tagged
-  `bt709` - **including the I-Log ones**. The stream-level colour
-  metadata does not mark I-Log; record 0x101 field 22 `gamma_mode` does:
-  `standard` vs `I_Log` (confirmed on 8K/6K/4K clips, fw v1.2.36).
-  `ApplyLensProfile` reads it into `StitchParams::logInput`; on `I_Log`
-  the lens sampling (GPU shader and CPU stitcher alike) decodes the
-  2026.05.20 white-paper curve to linear reflectance on BT.2020, then
-  gamut-maps to BT.709 and re-encodes with the BT.709 OETF, so the seam
-  measure, blending and grading see ordinary display-encoded RGB.
+- ✅ Every sample clip is H.265 Main 10 (`yuv420p10le`). Standard and
+  I-Log clips are VUI-tagged `bt709`; **Dolby Vision clips tag
+  `bt2020nc` + `arib-std-b67` (HLG)** with no RPU side data observed -
+  the stream is plain HLG/BT.2020 limited-range (confirmed on
+  8K/6K/4K clips, fw v1.2.36). The mode marker is record 0x101 field
+  22 `gamma_mode`: `standard` / `I_Log` / `Dolby_Vision`.
+  `ApplyLensProfile` reads it into `StitchParams::gammaMode` (0/1/2);
+  for the non-standard modes the lens sampling (GPU shader and CPU
+  stitcher alike) decodes to linear light on BT.2020 - the 2026.05.20
+  white-paper curve for I_Log, the HLG inverse OETF plus the BT.2100
+  OOTF evaluated at the SDR system gamma (~0.78 for 100 nits) for
+  Dolby_Vision - then gamut-maps to BT.709 and re-encodes with the
+  BT.709 OETF, so the seam measure, blending and grading see ordinary
+  display-encoded RGB.
 - ✅ The GPU stitch samples the decoder's pictures through a ycbcr
   conversion built for the frame's real `VkFormat` - the Main 10
   `G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16` decodes at full precision
@@ -47,8 +52,7 @@ what our code assumes. Written as differences from the X5
   HEVC Main 10: the fused view packs P010 straight into the encoder's
   Vulkan frame pool (`hevc_vulkan`), with NV12 staging widened to
   P010LE on CPU paths (`hevc_vaapi`) and an 8-bit retry when Main 10
-  can't open. Dolby Vision presumably BT.2020 with a PQ or HLG transfer
-  (❓ unconfirmed) and a tone map.
+  can't open.
 - The X5 has I-Log too (X5 §3.3), so the same work covers it.
 
 ## Trailer

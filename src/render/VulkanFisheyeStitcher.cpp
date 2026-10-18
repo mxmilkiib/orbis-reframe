@@ -53,7 +53,7 @@ void packParams(const insv::StitchGpuParams& p, int eqW, int eqH, ShaderParams& 
     sp.edge[0] = p.edgeStartFrac;
     sp.edge[1] = p.edgeEndFrac;
     sp.edge[2] = static_cast<float>(p.photometric);
-    sp.edge[3] = static_cast<float>(p.logInput);
+    sp.edge[3] = static_cast<float>(p.gammaMode);
     sp.dims[0] = p.fisheyeW;
     sp.dims[1] = p.fisheyeH;
     sp.dims[2] = eqW;

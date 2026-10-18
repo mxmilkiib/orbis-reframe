@@ -38,7 +38,7 @@ layout(std140, binding = 0) uniform Params {
     vec4 outRot[3]; // global equirect orientation rows
     vec4 cxcy;      // cx0, cy0, cx1, cy1   (fisheye-pixel space)
     vec4 seam;      // seamRad, bandRad, thetaMaxRad, thetaRef (circle edge, rad)
-    vec4 edge;      // edgeStartFrac, edgeEndFrac, photometric(0/1), logInput(0/1)
+    vec4 edge;      // edgeStartFrac, edgeEndFrac, photometric(0/1), gammaMode(0/1/2)
     ivec4 dims;     // fisheyeW, fisheyeH, eqW, eqH
     // Extended MEI (Mei/unified) model. See insv::LensProjection / gpuParams().
     vec4 meiA;      // xi0, xi1, fx0, fx1
@@ -81,34 +81,59 @@ layout(push_constant) uniform PC { int pass; } pc;
 const float PI = 3.14159265358979323846;
 const float GAIN_FP = 4.0;
 
-// I-Log -> BT.709 (StitchParams::logInput, P.edge.w). The June-2026 white-paper
-// curve maps a code value to linear reflectance on BT.2020 primaries; a gamut
-// matrix and the BT.709 OETF produce ordinary display-encoded RGB, so the rest
-// of the pipeline (gains, seam costs, blending, grading) is unaffected.
+// Transfer decodes for StitchParams::gammaMode (P.edge.w). The June-2026
+// white-paper I-Log curve maps a code value to linear reflectance on BT.2020
+// primaries; "Dolby_Vision" clips carry HLG (arib-std-b67) on the same
+// primaries. Both end in a gamut matrix and the BT.709 OETF producing
+// ordinary display-encoded RGB, so the rest of the pipeline (gains, seam
+// costs, blending, grading) is unaffected.
 float ilogDecode(float v)
 {
     return v < 0.154402 ? (v - 0.09055934) / 5.77837328
                         : pow(10.0, (v - 0.623992) / 0.280055) - 0.01;
 }
+// HLG inverse OETF: signal -> scene light, a = 0.17883277, b = 0.28466892,
+// c = 0.55991073.
+float hlgDecode(float e)
+{
+    return e <= 0.5 ? (e * e) / 3.0
+                    : (exp((e - 0.55991073) / 0.17883277) + 0.28466892) / 12.0;
+}
 float oetf709(float l)
 {
     return l < 0.018 ? 4.5 * l : 1.099 * pow(l, 0.45) - 0.099;
 }
-vec3 ilogTo709(vec3 c)
+// BT.2020 -> BT.709 primaries (both D65) then the BT.709 OETF.
+vec3 lin2020To709(vec3 l)
 {
-    vec3 l = vec3(ilogDecode(c.r), ilogDecode(c.g), ilogDecode(c.b));
-    l = max(l, vec3(0.0));
-    // BT.2020 -> BT.709 primaries (both D65).
     vec3 d = vec3(dot(vec3(1.660491, -0.587641, -0.072850), l),
                   dot(vec3(-0.124550, 1.132900, -0.008349), l),
                   dot(vec3(-0.018151, -0.100579, 1.118730), l));
     return vec3(oetf709(max(d.r, 0.0)), oetf709(max(d.g, 0.0)), oetf709(max(d.b, 0.0)));
 }
-// The lens pixel at uv in [0,255], decoded to BT.709 when the clip is I-Log.
+vec3 ilogTo709(vec3 c)
+{
+    return lin2020To709(max(vec3(ilogDecode(c.r), ilogDecode(c.g), ilogDecode(c.b)),
+                          vec3(0.0)));
+}
+// HLG: decode to scene light, then the BT.2100 OOTF evaluated for the SDR
+// target -- the system gamma is 1.2 + 0.42*log10(Lw/1000), 0.78 at 100 nits
+// -- so channels scale by Ys^(gamma-1) = Ys^-0.22, then encode.
+vec3 hlgTo709(vec3 c)
+{
+    vec3 l = vec3(hlgDecode(c.r), hlgDecode(c.g), hlgDecode(c.b));
+    float ys = max(dot(l, vec3(0.2627, 0.6780, 0.0593)), 1e-6);
+    return lin2020To709(l * pow(ys, -0.22));
+}
+// The lens pixel at uv in [0,255], decoded to BT.709 for log/HDR sources.
 vec3 lensColor(int i, vec2 uv)
 {
     vec3 c = sampleLens(i, uv);
-    return P.edge.w == 0.0 ? c : ilogTo709(c / 255.0) * 255.0;
+    if (P.edge.w == 1.0)
+        c = ilogTo709(c / 255.0) * 255.0;
+    else if (P.edge.w == 2.0)
+        c = hlgTo709(c / 255.0) * 255.0;
+    return c;
 }
 
 vec3 mul3(vec4 r0, vec4 r1, vec4 r2, vec3 v)
