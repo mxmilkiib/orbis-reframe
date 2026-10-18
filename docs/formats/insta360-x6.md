@@ -33,14 +33,17 @@ what our code assumes. Written as differences from the X5
 - ✅ Every sample clip is H.265 Main 10 (`yuv420p10le`), VUI-tagged
   `bt709` - **including the I-Log ones**. The stream-level colour
   metadata does not mark I-Log; record 0x101 field 22 `gamma_mode` does:
-  `standard` vs `I_Log` (confirmed on 8K/6K/4K clips, fw v1.2.36). That
-  field is not parsed today, and nothing else consumes gamma.
+  `standard` vs `I_Log` (confirmed on 8K/6K/4K clips, fw v1.2.36).
+  `ApplyLensProfile` reads it into `StitchParams::logInput`; on `I_Log`
+  the lens sampling (GPU shader and CPU stitcher alike) decodes the
+  2026.05.20 white-paper curve to linear reflectance on BT.2020, then
+  gamut-maps to BT.709 and re-encodes with the BT.709 OETF, so the seam
+  measure, blending and grading see ordinary display-encoded RGB.
 - The app's GPU stitch samples the decoder's pictures as 8-bit NV12
   (`VK_FORMAT_G8_B8R8_2PLANE_420_UNORM`) through a BT.709 full-range
   conversion. A 10-bit stream needs a second sampler format and shader
-  variant; I-Log needs a log-to-linear conversion; Dolby Vision presumably
-  BT.2020 with a PQ or HLG transfer (❓ unconfirmed) and a tone map.
-  An I-Log clip stitched correctly but flat (sat ~0.16 vs ~0.31).
+  variant; Dolby Vision presumably BT.2020 with a PQ or HLG transfer
+  (❓ unconfirmed) and a tone map.
 - The X5 has I-Log too (X5 §3.3), so the same work covers it.
 
 ## Trailer
