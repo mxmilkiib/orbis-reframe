@@ -4,6 +4,7 @@
 #include "GyroStabilizer.h" // insv::leanWindowFromStrength
 
 #include <opencv2/core.hpp>
+#include <opencv2/features2d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video.hpp>
 
