@@ -133,6 +133,11 @@ public:
     // *_vulkan encoder shares the device and frames can stay resident.
     AVBufferRef* vulkanHwDevice() const;
 
+    // The source video's bit depth (8 for HEVC Main, 10 for Main 10 as the
+    // X6 records), 0 before a successful Open(). For picking a Main 10
+    // export (FlattenConfig::ten_bit).
+    int SourceBitDepth() const;
+
     // The ReadFlatFrame fused pass without the host round-trip: the NV12
     // view is copied on-device into `dst`, an AV_PIX_FMT_VULKAN frame
     // allocated from the encoder's hw frames context on vulkanHwDevice().

@@ -8,6 +8,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/pixdesc.h>
 #include <libavutil/rational.h>
 }
 
@@ -129,6 +130,9 @@ bool LensDemuxer::open(const std::string& path, const DecoderSetup& setup, std::
             return false;
         }
         info.fps = av_q2d(fr);
+        if (const AVPixFmtDescriptor* pd =
+                av_pix_fmt_desc_get(static_cast<AVPixelFormat>(st->codecpar->format)))
+            info.bitDepth = pd->comp[0].depth;
         if (st->duration != AV_NOPTS_VALUE)
             info.durationMs = static_cast<int64_t>(st->duration * av_q2d(st->time_base) * 1000.0);
         else if (m_fmt->duration != AV_NOPTS_VALUE)
