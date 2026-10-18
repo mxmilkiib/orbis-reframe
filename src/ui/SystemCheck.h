@@ -11,10 +11,10 @@ class EquirectViewportWindow;
 // the panels.
 namespace syscheck {
 
-// NVIDIA's hardware encoder (libnvidia-encode.so.1, which FFmpeg's *_nvenc
-// encoders load at run time). The export needs it.
-bool nvencAvailable();
-QString nvencMissingText();
+// A hardware video encoder the export can use (FFmpeg's NVENC, Vulkan-video
+// or VAAPI wrapper; exportpipe::hwEncoderAvailable).
+bool hwEncoderAvailable();
+QString hwEncoderMissingText();
 
 // Whether the viewport's GPU has Vulkan video decode for H.265 (the X5's
 // codec in every mode). Without it clips decode on the CPU: slow for 5.7K / 8K.

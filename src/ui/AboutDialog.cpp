@@ -4,6 +4,7 @@
 
 #include "../core/DataPaths.h"
 #include "../core/Version.h"
+#include "../export/ReframeFlatten.h"
 #include "../render/EquirectViewportWindow.h"
 
 #include <NoiseFilter.h> // insv::voiceModesReady
@@ -60,9 +61,14 @@ QString diagnostics(EquirectViewportWindow *viewport)
     } else {
         out << QStringLiteral("GPU: unknown (the viewport hasn't started Vulkan)");
     }
-    out << QStringLiteral("NVENC (export): %1")
-               .arg(syscheck::nvencAvailable() ? QStringLiteral("found")
-                                               : QStringLiteral("not found (libnvidia-encode.so.1)"));
+    QStringList encoders;
+    if (const char *n = exportpipe::hwEncoderName(true))
+        encoders << QString::fromLatin1(n);
+    if (const char *n = exportpipe::hwEncoderName(false))
+        encoders << QString::fromLatin1(n);
+    out << QStringLiteral("Video encoder (export): %1")
+               .arg(encoders.isEmpty() ? QStringLiteral("none found")
+                                       : encoders.join(QLatin1String(", ")));
 #ifdef ORBIS_REFRAME_HAVE_AUDIO
     out << QStringLiteral("Audio playback: built in");
 #else

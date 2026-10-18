@@ -1,5 +1,6 @@
 #include "SystemCheck.h"
 
+#include "../export/ReframeFlatten.h"
 #include "../render/EquirectViewportWindow.h"
 
 #ifdef ORBIS_REFRAME_HAVE_TRACKING
@@ -14,8 +15,6 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QStringList>
-
-#include <dlfcn.h>
 
 namespace syscheck {
 
@@ -37,21 +36,18 @@ const QString kHiddenKey = QStringLiteral("startupWarnings/hidden");
 
 } // namespace
 
-bool nvencAvailable()
+bool hwEncoderAvailable()
 {
-    void *h = dlopen("libnvidia-encode.so.1", RTLD_LAZY | RTLD_LOCAL);
-    if (h)
-        dlclose(h);
-    return h != nullptr;
+    return exportpipe::hwEncoderAvailable();
 }
 
-QString nvencMissingText()
+QString hwEncoderMissingText()
 {
-    return tr("Exporting needs NVIDIA's hardware video encoder (NVENC), and it wasn't found "
-              "(libnvidia-encode.so.1). Editing and playback work, but File ▸ Export flat video… "
-              "doesn't.\n\nWith an NVIDIA card, install the encoder library: on Debian, "
-              "sudo apt install libnvidia-encode1 (NVIDIA's own driver installer includes it). "
-              "Other graphics cards can't export yet.");
+    return tr("Exporting needs a hardware video encoder (NVIDIA NVENC, Vulkan "
+              "video or VAAPI), and none was found. Editing and playback work, "
+              "but File ▸ Export flat video… doesn't.\n\nWith an NVIDIA card, "
+              "install the encoder library: on Debian, sudo apt install "
+              "libnvidia-encode1 (NVIDIA's own driver installer includes it).");
 }
 
 bool gpuVideoDecode(EquirectViewportWindow *viewport)
@@ -107,9 +103,9 @@ void warnAtStartup(QWidget *parent, EquirectViewportWindow *viewport)
         ids << QStringLiteral("gpu-decode");
         texts << gpuDecodeMissingText();
     }
-    if (!nvencAvailable() && !hidden.contains(QStringLiteral("nvenc"))) {
+    if (!hwEncoderAvailable() && !hidden.contains(QStringLiteral("nvenc"))) {
         ids << QStringLiteral("nvenc");
-        texts << nvencMissingText();
+        texts << hwEncoderMissingText();
     }
     if (ids.isEmpty())
         return;

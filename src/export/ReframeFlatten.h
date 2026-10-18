@@ -8,10 +8,19 @@
 // The reproject + encode half of the reframe export: take equirect frames
 // straight from stitch::NativeStitchSource in memory, CPU-reproject each against
 // the caller-baked pose (exportpipe::RenderRectilinear) -- or take frames the
-// GPU already reprojected -- and encode via FFmpeg's NVENC wrapper + mux.
+// GPU already reprojected -- and encode through the hardware encoder the
+// machine has (NVENC, Vulkan video or VAAPI) + mux.
 // Links system FFmpeg only.
 
 namespace exportpipe {
+
+// True when one of the hardware encoders FlattenWriter tries -- NVENC,
+// Vulkan video or VAAPI -- exists in this FFmpeg and has a device it can
+// run on. The UI gates the export on this.
+bool hwEncoderAvailable();
+// The encoder FlattenWriter would pick for the codec ("hevc_vulkan"),
+// nullptr when none is usable. For status display.
+const char* hwEncoderName(bool h265);
 
 struct ReframeView;
 

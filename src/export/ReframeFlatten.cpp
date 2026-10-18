@@ -5,15 +5,19 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
 }
+
+#include <dlfcn.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -35,6 +39,12 @@ struct Encoder {
     SwsContext* toNv12 = nullptr;
     AVFrame* nv12 = nullptr;
     AVPacket* pkt = nullptr;
+    // Hardware-surface encoders (Vulkan video, VAAPI): nv12 is uploaded into
+    // `hw` before it's sent to the encoder. All nullptr when the encoder
+    // takes CPU frames as they are (NVENC).
+    AVBufferRef* hwDevice = nullptr;
+    AVBufferRef* hwFrames = nullptr;
+    AVFrame* hw = nullptr;
     // Optional AAC audio stream (FlattenConfig::audio_sample_rate > 0).
     AVCodecContext* actx = nullptr;
     AVStream* astream = nullptr;
@@ -47,6 +57,12 @@ void closeEncoder(Encoder& e)
         av_frame_free(&e.aframe);
     if (e.actx)
         avcodec_free_context(&e.actx);
+    if (e.hw)
+        av_frame_free(&e.hw);
+    if (e.hwFrames)
+        av_buffer_unref(&e.hwFrames);
+    if (e.hwDevice)
+        av_buffer_unref(&e.hwDevice);
     if (e.toNv12) {
         sws_freeContext(e.toNv12);
         e.toNv12 = nullptr;
@@ -65,14 +81,105 @@ void closeEncoder(Encoder& e)
     }
 }
 
+// FFmpeg ships the *_nvenc encoders whether or not the NVIDIA driver is
+// installed; the driver library is dlopen'ed when the encoder is opened, so
+// look for it instead of letting avcodec_open2 fail.
+bool nvencLibraryPresent()
+{
+    void* h = dlopen("libnvidia-encode.so.1", RTLD_LAZY | RTLD_LOCAL);
+    if (h)
+        dlclose(h);
+    return h != nullptr;
+}
+
+// The encoder names openEncoder() tries, in order: NVENC, then Vulkan video
+// (the same API the decode path already uses), then VAAPI.
+const char* const* encoderNames(bool h265)
+{
+    static const char* const h264[] = {"h264_nvenc", "h264_vulkan", "h264_vaapi"};
+    static const char* const hevc[] = {"hevc_nvenc", "hevc_vulkan", "hevc_vaapi"};
+    return h265 ? hevc : h264;
+}
+
+AVHWDeviceType deviceFor(const char* encName)
+{
+    if (std::strstr(encName, "_vulkan"))
+        return AV_HWDEVICE_TYPE_VULKAN;
+    if (std::strstr(encName, "_vaapi"))
+        return AV_HWDEVICE_TYPE_VAAPI;
+    return AV_HWDEVICE_TYPE_NONE;
+}
+
+// Whether `encName` can run on this machine: the encoder exists in this
+// FFmpeg, plus NVENC's driver library or -- for the hardware-surface
+// encoders -- a device it can use. When `deviceOut` is given the working
+// device is handed back (caller unrefs) for the encoder to run on.
+bool encoderUsable(const char* encName, AVBufferRef** deviceOut)
+{
+    if (!avcodec_find_encoder_by_name(encName))
+        return false;
+    const AVHWDeviceType dev = deviceFor(encName);
+    if (dev == AV_HWDEVICE_TYPE_NONE)
+        return nvencLibraryPresent();
+    AVBufferRef* hw = nullptr;
+    if (av_hwdevice_ctx_create(&hw, dev, nullptr, nullptr, 0) < 0)
+        return false;
+    if (deviceOut)
+        *deviceOut = hw;
+    else
+        av_buffer_unref(&hw);
+    return true;
+}
+
+// The encoder openEncoder() would pick, probed once per codec.
+const char* pickedEncoder(bool h265)
+{
+    static const char* picked[2] = {nullptr, nullptr};
+    static std::once_flag once;
+    std::call_once(once, [] {
+        for (int codec = 0; codec < 2; ++codec)
+            for (int i = 0; i < 3; ++i) {
+                const char* name = encoderNames(codec)[i];
+                if (encoderUsable(name, nullptr)) {
+                    picked[codec] = name;
+                    break;
+                }
+            }
+    });
+    return picked[h265];
+}
+
+} // namespace
+
+bool hwEncoderAvailable()
+{
+    return pickedEncoder(false) || pickedEncoder(true);
+}
+
+const char* hwEncoderName(bool h265)
+{
+    return pickedEncoder(h265);
+}
+
+namespace {
+
 bool openEncoder(const FlattenConfig& p, Encoder& e, std::string& err)
 {
-    const char* encName = p.h265 ? "hevc_nvenc" : "h264_nvenc";
-    const AVCodec* enc = avcodec_find_encoder_by_name(encName);
+    const AVCodec* enc = nullptr;
+    const char* encName = nullptr;
+    for (int i = 0; i < 3; ++i) {
+        const char* name = encoderNames(p.h265)[i];
+        if (encoderUsable(name, &e.hwDevice)) {
+            enc = avcodec_find_encoder_by_name(name);
+            encName = name;
+            break;
+        }
+    }
     if (!enc) {
-        err = std::string(encName) + " not available (NVIDIA driver loaded? NVENC-enabled ffmpeg?)";
+        err = "no usable hardware encoder (tried NVENC, Vulkan video and VAAPI)";
         return false;
     }
+    const AVHWDeviceType deviceType = deviceFor(encName);
 
     avformat_alloc_output_context2(&e.fmt, nullptr, nullptr, p.out_path.c_str());
     if (!e.fmt) {
@@ -86,7 +193,39 @@ bool openEncoder(const FlattenConfig& p, Encoder& e, std::string& err)
     const AVRational tb = av_d2q(1.0 / p.fps, 1000000);
     e.ctx->time_base = tb;
     e.ctx->framerate = av_inv_q(tb);
-    e.ctx->pix_fmt = AV_PIX_FMT_NV12;
+    if (deviceType == AV_HWDEVICE_TYPE_NONE) {
+        e.ctx->pix_fmt = AV_PIX_FMT_NV12;
+    } else {
+        // *_vulkan / *_vaapi take hardware surfaces only; the NV12 frames are
+        // uploaded into `e.hw` before each send (drainEncoder). sw_pix_fmt
+        // tells the encoder what those surfaces carry.
+        e.ctx->pix_fmt = deviceType == AV_HWDEVICE_TYPE_VULKAN ? AV_PIX_FMT_VULKAN
+                                                             : AV_PIX_FMT_VAAPI;
+        e.ctx->sw_pix_fmt = AV_PIX_FMT_NV12;
+        e.ctx->hw_device_ctx = av_buffer_ref(e.hwDevice);
+        e.hwFrames = av_hwframe_ctx_alloc(e.hwDevice);
+        if (!e.hwFrames) {
+            err = "cannot allocate hardware frames context";
+            return false;
+        }
+        auto* fc = reinterpret_cast<AVHWFramesContext*>(e.hwFrames->data);
+        fc->format = e.ctx->pix_fmt;
+        fc->sw_format = AV_PIX_FMT_NV12;
+        fc->width = p.out_w;
+        fc->height = p.out_h;
+        if (av_hwframe_ctx_init(e.hwFrames) < 0) {
+            err = "init hardware frames context";
+            return false;
+        }
+        // Vulkan video requires the frames context at open (VAAPI would
+        // derive one from the device); the uploaded frames come out of it.
+        e.ctx->hw_frames_ctx = av_buffer_ref(e.hwFrames);
+        e.hw = av_frame_alloc();
+        if (!e.hw) {
+            err = "cannot allocate hardware frame";
+            return false;
+        }
+    }
     // BT.709 limited range, matching reframe_reproject.comp and the swscale
     // setup below; tagged so players don't have to guess.
     e.ctx->color_range = AVCOL_RANGE_MPEG;
@@ -99,9 +238,11 @@ bool openEncoder(const FlattenConfig& p, Encoder& e, std::string& err)
     e.ctx->gop_size = std::max(1, static_cast<int>(std::lround(p.fps)) * 2);
     if (e.fmt->oformat->flags & AVFMT_GLOBALHEADER)
         e.ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    av_opt_set(e.ctx->priv_data, "preset", "p5", 0);
-    av_opt_set(e.ctx->priv_data, "tune", "hq", 0);
-    av_opt_set(e.ctx->priv_data, "rc", "vbr", 0);
+    if (deviceType == AV_HWDEVICE_TYPE_NONE) {
+        av_opt_set(e.ctx->priv_data, "preset", "p5", 0);
+        av_opt_set(e.ctx->priv_data, "tune", "hq", 0);
+        av_opt_set(e.ctx->priv_data, "rc", "vbr", 0);
+    }
 
     int ret = avcodec_open2(e.ctx, enc, nullptr);
     if (ret < 0) {
@@ -200,8 +341,24 @@ bool drainTo(Encoder& e, AVCodecContext* ctx, AVStream* stream, AVFrame* frame, 
     return true;
 }
 
+// Send `frame` (nullptr => flush) to the video encoder. When it wants
+// hardware surfaces the NV12 frame is uploaded into `e.hw` first.
 bool drainEncoder(Encoder& e, AVFrame* frame, std::string& err)
 {
+    if (frame && e.hw) {
+        av_frame_unref(e.hw);
+        int ret = av_hwframe_get_buffer(e.hwFrames, e.hw, 0);
+        if (ret < 0) {
+            err = avErr("allocate hardware frame", ret);
+            return false;
+        }
+        if ((ret = av_hwframe_transfer_data(e.hw, frame, 0)) < 0) {
+            err = avErr("upload frame to the GPU", ret);
+            return false;
+        }
+        av_frame_copy_props(e.hw, frame);
+        frame = e.hw;
+    }
     return drainTo(e, e.ctx, e.stream, frame, err);
 }
 
