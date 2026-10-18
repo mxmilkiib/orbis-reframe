@@ -38,7 +38,7 @@ layout(std140, binding = 0) uniform Params {
     vec4 outRot[3]; // global equirect orientation rows
     vec4 cxcy;      // cx0, cy0, cx1, cy1   (fisheye-pixel space)
     vec4 seam;      // seamRad, bandRad, thetaMaxRad, thetaRef (circle edge, rad)
-    vec4 edge;      // edgeStartFrac, edgeEndFrac, photometric(0/1), -
+    vec4 edge;      // edgeStartFrac, edgeEndFrac, photometric(0/1), logInput(0/1)
     ivec4 dims;     // fisheyeW, fisheyeH, eqW, eqH
     // Extended MEI (Mei/unified) model. See insv::LensProjection / gpuParams().
     vec4 meiA;      // xi0, xi1, fx0, fx1
@@ -80,6 +80,36 @@ layout(push_constant) uniform PC { int pass; } pc;
 
 const float PI = 3.14159265358979323846;
 const float GAIN_FP = 4.0;
+
+// I-Log -> BT.709 (StitchParams::logInput, P.edge.w). The June-2026 white-paper
+// curve maps a code value to linear reflectance on BT.2020 primaries; a gamut
+// matrix and the BT.709 OETF produce ordinary display-encoded RGB, so the rest
+// of the pipeline (gains, seam costs, blending, grading) is unaffected.
+float ilogDecode(float v)
+{
+    return v < 0.154402 ? (v - 0.09055934) / 5.77837328
+                        : pow(10.0, (v - 0.623992) / 0.280055) - 0.01;
+}
+float oetf709(float l)
+{
+    return l < 0.018 ? 4.5 * l : 1.099 * pow(l, 0.45) - 0.099;
+}
+vec3 ilogTo709(vec3 c)
+{
+    vec3 l = vec3(ilogDecode(c.r), ilogDecode(c.g), ilogDecode(c.b));
+    l = max(l, vec3(0.0));
+    // BT.2020 -> BT.709 primaries (both D65).
+    vec3 d = vec3(dot(vec3(1.660491, -0.587641, -0.072850), l),
+                  dot(vec3(-0.124550, 1.132900, -0.008349), l),
+                  dot(vec3(-0.018151, -0.100579, 1.118730), l));
+    return vec3(oetf709(max(d.r, 0.0)), oetf709(max(d.g, 0.0)), oetf709(max(d.b, 0.0)));
+}
+// The lens pixel at uv in [0,255], decoded to BT.709 when the clip is I-Log.
+vec3 lensColor(int i, vec2 uv)
+{
+    vec3 c = sampleLens(i, uv);
+    return P.edge.w == 0.0 ? c : ilogTo709(c / 255.0) * 255.0;
+}
 
 vec3 mul3(vec4 r0, vec4 r1, vec4 r2, vec3 v)
 {
@@ -300,8 +330,8 @@ void measureAt(vec3 dir)
     float w0, w1;
     lensWeights(dir, uv0, uv1, w0, w1);
     if (w0 > 0.25 && w1 > 0.25) {
-        atomicAdd(gsum[0], uint(luma(sampleLens(0, uv0)) * GAIN_FP));
-        atomicAdd(gsum[1], uint(luma(sampleLens(1, uv1)) * GAIN_FP));
+        atomicAdd(gsum[0], uint(luma(lensColor(0, uv0)) * GAIN_FP));
+        atomicAdd(gsum[1], uint(luma(lensColor(1, uv1)) * GAIN_FP));
         atomicAdd(gsum[2], 1u);
     }
 }
@@ -350,8 +380,8 @@ void seamCostPass(uvec3 wg, uint lid)
         if (p0.x < 0.0 || p0.y < 0.0 || p0.x > fw - 1.0 || p0.y > fh - 1.0 ||
             p1.x < 0.0 || p1.y < 0.0 || p1.x > fw - 1.0 || p1.y > fh - 1.0)
             continue;
-        float x = luma(sampleLens(0, (p0.xy + 0.5) / vec2(fw, fh)));
-        float y = luma(sampleLens(1, (p1.xy + 0.5) / vec2(fw, fh)));
+        float x = luma(lensColor(0, (p0.xy + 0.5) / vec2(fw, fh)));
+        float y = luma(lensColor(1, (p1.xy + 0.5) / vec2(fw, fh)));
         sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y; n += 1.0;
     }
     seamRed[0][lid] = sx;
@@ -392,8 +422,8 @@ vec3 blendLenses(vec3 dir, float g0, float g1)
     lensWeights(dir, uv0, uv1, w0, w1);
     vec3 acc = vec3(0.0);
     float wsum = 0.0;
-    if (w0 > 0.0) { acc += w0 * g0 * sampleLens(0, uv0); wsum += w0; }
-    if (w1 > 0.0) { acc += w1 * g1 * sampleLens(1, uv1); wsum += w1; }
+    if (w0 > 0.0) { acc += w0 * g0 * lensColor(0, uv0); wsum += w0; }
+    if (w1 > 0.0) { acc += w1 * g1 * lensColor(1, uv1); wsum += w1; }
     return wsum > 1e-6 ? acc / wsum : vec3(0.0);
 }
 

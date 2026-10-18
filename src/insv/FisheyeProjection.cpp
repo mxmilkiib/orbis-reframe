@@ -70,6 +70,7 @@ bool ApplyLensProfile(StitchParams& params, const InsvMakerNotes& notes,
                       const std::string& accessoryName)
 {
     params.accessory = false;
+    params.logInput = notes.gamma_mode == "I_Log";
     if (notes.crop_dst_w > 0)
         params.cropRefW = notes.crop_dst_w;
     const LensProfile* bare = FindLensProfile(notes, "bare");
@@ -288,6 +289,7 @@ StitchGpuParams FisheyeStitcher::gpuParams() const
     }
     p.halfBaseline = static_cast<float>(m_halfBaseline);
     p.depthRampRad = static_cast<float>(m_params.depthRampDeg * kDeg);
+    p.logInput = m_params.logInput ? 1 : 0;
     return p;
 }
 
@@ -394,6 +396,36 @@ double FisheyeStitcher::seamBlendWeight(int lens, const Vec3& dir) const
     return seamWeight(std::acos(std::clamp(c, -1.0, 1.0)), m_thetaSeamRad, m_bandRad);
 }
 
+namespace {
+// I-Log -> BT.709 for StitchParams::logInput (maker notes gamma_mode "I_Log").
+// The June-2026 Insta360 white-paper curve maps a code value to linear
+// reflectance on BT.2020 primaries; a gamut matrix and the BT.709 OETF bring
+// it to ordinary display-encoded RGB. In/out are [0,255]-scaled channels.
+float decodeILog(float v01)
+{
+    // decode: v < 0.154402 ? (v - 0.09055934)/5.77837328
+    //                     : pow(10, (v - 0.623992)/0.280055) - 0.01
+    const float l = v01 < 0.154402f ? (v01 - 0.09055934f) / 5.77837328f
+                                  : std::pow(10.0f, (v01 - 0.623992f) / 0.280055f) - 0.01f;
+    return std::max(l, 0.0f);
+}
+float oetf709(float l)
+{
+    return l < 0.018f ? 4.5f * l : 1.099f * std::pow(l, 0.45f) - 0.099f;
+}
+void ilogTo709(std::array<float, 3>& rgb)
+{
+    float l[3] = {decodeILog(rgb[0] / 255.0f), decodeILog(rgb[1] / 255.0f),
+                  decodeILog(rgb[2] / 255.0f)};
+    // BT.2020 -> BT.709 primaries (both D65).
+    const float r = 1.660491f * l[0] - 0.587641f * l[1] - 0.072850f * l[2];
+    const float g = -0.124550f * l[0] + 1.132900f * l[1] - 0.008349f * l[2];
+    const float b = -0.018151f * l[0] - 0.100579f * l[1] + 1.118730f * l[2];
+    rgb = {oetf709(std::max(r, 0.0f)) * 255.0f, oetf709(std::max(g, 0.0f)) * 255.0f,
+           oetf709(std::max(b, 0.0f)) * 255.0f};
+}
+} // namespace
+
 double FisheyeStitcher::edgeWeight(double thetaRad) const
 {
     return circleEdgeWeight(radiusForTheta(thetaRad), m_params.edgeStartFrac, m_params.edgeEndFrac);
@@ -426,6 +458,14 @@ void FisheyeStitcher::renderEquirect(const Image& lens0, const Image& lens1, Ima
         return w > 0.0;
     };
 
+    // Lens pixel at (u,v), decoded to BT.709 when the clip is I-Log.
+    auto pix = [&](int i, double u, double v) {
+        auto s = lim[i]->sample(u, v);
+        if (m_params.logInput)
+            ilogTo709(s);
+        return s;
+    };
+
     // --- photometric prepass: mean luma of each lens across the overlap band,
     // on a coarse grid. gain[i] pulls lens i toward the geometric-mean level so
     // the seam has no exposure step. Mirrors fisheye_stitch_common.glsl pass 0.
@@ -446,8 +486,8 @@ void FisheyeStitcher::renderEquirect(const Image& lens0, const Image& lens1, Ima
                     continue;
                 if (w0 <= 0.25 || w1 <= 0.25)
                     continue;
-                const auto s0 = lim[0]->sample(u0, v0);
-                const auto s1 = lim[1]->sample(u1, v1);
+                const auto s0 = pix(0, u0, v0);
+                const auto s1 = pix(1, u1, v1);
                 sum0 += 0.299 * s0[0] + 0.587 * s0[1] + 0.114 * s0[2];
                 sum1 += 0.299 * s1[0] + 0.587 * s1[1] + 0.114 * s1[2];
                 ++cnt;
@@ -472,7 +512,7 @@ void FisheyeStitcher::renderEquirect(const Image& lens0, const Image& lens1, Ima
             double u, v, w;
             if (!lensSample(i, dir, q, u, v, w))
                 continue;
-            const auto s = lim[i]->sample(u, v);
+            const auto s = pix(i, u, v);
             acc[0] += w * gain[i] * s[0];
             acc[1] += w * gain[i] * s[1];
             acc[2] += w * gain[i] * s[2];

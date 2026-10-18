@@ -127,6 +127,12 @@ struct StitchParams {
     double outYawDeg = 180.0;
     double outPitchDeg = 0.0;
     double outRollDeg = 0.0;
+
+    // The clip's pixels are I-Log encoded (maker notes 0x101 field 22
+    // `gamma_mode` = "I_Log", the X5's and X6's log profile): lens samples are
+    // decoded to linear reflectance and re-encoded as BT.709 before stitching,
+    // so everything downstream sees ordinary display-encoded RGB.
+    bool logInput = false;
 };
 
 // Sets `params` up for the lens accessory named `accessoryName` (a field-145
@@ -223,6 +229,8 @@ struct StitchGpuParams {
     // (sphere) frame, prepared. Per frame, like the RS taps.
     int blurCount = 0;
     BlurQuadFrame blur[kMaxBlurQuads];
+    // StitchParams::logInput: decode I-Log samples to BT.709 in the shader.
+    int logInput = 0;
 };
 
 class FisheyeStitcher {

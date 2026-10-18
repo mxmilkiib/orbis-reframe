@@ -33,7 +33,7 @@ struct ShaderParams {
     float outRot[3][4];
     float cxcy[4];
     float seam[4];
-    float edge[4];
+    float edge[4];  // edgeStartFrac, edgeEndFrac, photometric, logInput
     int32_t dims[4];
     float meiA[4];  // xi0, xi1, fx0, fx1
     float meiB[4];  // fy0, fy1, -, accessory
