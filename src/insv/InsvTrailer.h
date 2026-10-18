@@ -31,6 +31,10 @@ struct InsvMakerNotes {
     std::string firmware;
     std::string parameters;
     std::vector<LensProfile> lens_profiles; // empty on files without field 145
+    // Field 27 `window_crop_info` dst width: the focal reference frame the
+    // extended MEI calibration's fx/fy live in (5312 on the X5, 7680 on the
+    // X6; docs/formats/insta360-x5.md §5.1). 0 when absent.
+    double crop_dst_w = 0;
 };
 
 // The profile named `name` in `notes`, or nullptr.

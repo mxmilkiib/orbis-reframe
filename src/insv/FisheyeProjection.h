@@ -64,6 +64,12 @@ struct StitchParams {
     double fovDeg = 200.0;
     static constexpr double kSeamMarginDeg = 2.5;
 
+    // Focal-reference width the MEI fx/fy are calibrated in (0x101 field 27
+    // `window_crop_info` dst: 5312 on the X5, 7680 on the X6). Set by
+    // ApplyLensProfile from the maker notes; 5312 is the X5 default for files
+    // that don't carry the field.
+    double cropRefW = 5312.0;
+
     // Accessory lens-profile correction (lens guards, dive cases). The
     // trailer's MEI calibration describes the bare lens. An accessory bends the
     // field so each angle lands further out on the sensor -- ~2.3 % at the seam

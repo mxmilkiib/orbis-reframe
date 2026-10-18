@@ -408,6 +408,16 @@ std::optional<InsvMakerNotes> ReadInsvMakerNotes(const std::string& file_path) {
             if (id == 0x101) {
                 ParseMakerNotes(payload, result);
                 ParseLensProfiles(payload, result.lens_profiles);
+                WalkProtobuf(payload, [&](uint32_t f, int wt, uint64_t,
+                                        const std::vector<uint8_t>& b) {
+                    if (f != 27 || wt != 2) return;
+                    WalkProtobuf(b, [&](uint32_t g, int gwt, uint64_t gv,
+                                        const std::vector<uint8_t>&) {
+                        // {1: srcW, 2: srcH, 3: dstW, 4: dstH}
+                        if (g == 3 && gwt == 0)
+                            result.crop_dst_w = static_cast<double>(gv);
+                    });
+                });
                 found = true;
                 return false; // this is the only record type we need
             }

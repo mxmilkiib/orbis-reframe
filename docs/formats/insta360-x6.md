@@ -35,13 +35,25 @@ assumes. Written as differences from the X5 ([`insta360-x5.md`](insta360-x5.md),
 
 ## Trailer
 
+- ✅ Examined (8K30 clip, fw v1.2.36): same magic/footer/record-directory
+  framing as the X5. The maker-notes record carries serial, model
+  ("Insta360 X6"), firmware, and the 0x400/0x300 exposure/IMU records parse
+  with the X5 layouts (~1 kHz raw IMU).
+- ✅ The extended MEI calibration string is present in fields 111/112 of
+  record 0x101 (56 tokens, same layout as the X5) - e.g. xi 2.455,
+  fx/fy 7232, cx/cy ~3850/3880, roll ~90, combined frame **15488×7744**,
+  type 193. `ParseExtendedCalibrationString`'s sanity ranges hold.
+- ✅ Field 27 `window_crop_info` is present: src 7744², **dst 7680²** (vs
+  5376²→5312² on the X5). The stitch's focal-reference width is no longer
+  hard-coded to 5312; it comes from this field (`InsvMakerNotes::crop_dst_w`
+  → `StitchParams::cropRefW`). With the wrong reference the projected circle
+  lands too small and the equirect shows two inscribed discs with gaps.
+- ❌ **No field 145 lens-profile table** on the X6: `lens_profiles` is empty,
+  so accessory names ("ProtectorA"/...) never resolve and the stitch always
+  runs as a bare lens at the default `fovDeg` 200. That produced correct
+  output on the sample clip; the X6's usable FOV may differ slightly.
 - ❓ telemetry-parser has no X6-specific code; an unknown model gets its
-  default IMU orientation, `Xyz`. The trailer's framing, the calibration
-  strings (X5 §5) and the IMU layout (X5 §6) are all unconfirmed.
-- The larger sensor likely changes the calibration's reference frame
-  (10752×5376 on the X5) and maybe the IMU part (field 51). Both are read
-  from the file, but the sanity ranges in `Calibration.cpp` were set from
-  X5 values.
+  default IMU orientation, `Xyz`. The IMU axis convention is unconfirmed.
 
 ## Sources
 

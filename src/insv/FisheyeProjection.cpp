@@ -70,6 +70,8 @@ bool ApplyLensProfile(StitchParams& params, const InsvMakerNotes& notes,
                       const std::string& accessoryName)
 {
     params.accessory = false;
+    if (notes.crop_dst_w > 0)
+        params.cropRefW = notes.crop_dst_w;
     const LensProfile* bare = FindLensProfile(notes, "bare");
     if (bare && bare->fov_deg > 0)
         params.fovDeg = bare->fov_deg;
@@ -113,8 +115,10 @@ bool FisheyeStitcher::configure(const InsvCalibration& cal, int streamW, int str
 
     // sensor -> video scaling for the MEI intrinsics (insv-stitch
     // x5_pipeline.py `_sensor_to_video`): fx/fy divide by the crop dst width,
-    // cx/cy by the full single-lens sensor width.
-    constexpr double kCropDstW = 5312.0;
+    // cx/cy by the full single-lens sensor width. The crop dst width comes
+    // from the trailer's field 27 via params.cropRefW (5312 on the X5,
+    // 7680 on the X6).
+    const double kCropDstW = params.cropRefW;
 
     for (int i = 0; i < 2; ++i) {
         const LensCalibExt& e = cal.lensesExt[i];
