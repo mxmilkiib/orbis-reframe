@@ -138,9 +138,10 @@ public:
     // export (FlattenConfig::ten_bit).
     int SourceBitDepth() const;
 
-    // The ReadFlatFrame fused pass without the host round-trip: the NV12
-    // view is copied on-device into `dst`, an AV_PIX_FMT_VULKAN frame
-    // allocated from the encoder's hw frames context on vulkanHwDevice().
+    // The ReadFlatFrame fused pass without the host round-trip: the NV12 or
+    // P010 view (per the encoder pool's sw_format) is copied on-device into
+    // `dst`, an AV_PIX_FMT_VULKAN frame allocated from the encoder's hw frames
+    // context on vulkanHwDevice().
     // The frame's AVVkFrame semaphore/layout bookkeeping is advanced to the
     // submission. Same pose / stab / grade handling as ReadFlatFrame; false
     // at end-of-clip (GetLastError() empty) or on error. Requires
@@ -240,7 +241,8 @@ private:
     // fused). False with last_error_ set on error; false with it empty at EOS.
     enum class FlatPath { ViaEquirect, FusedNv12, FusedRgba };
     // `vkDst` (an AV_PIX_FMT_VULKAN AVFrame on the shared device) is only
-    // valid for FusedNv12 and replaces `out`: the NV12 lands in its images.
+    // valid for FusedNv12 and replaces `out`: the NV12 or P010 (per the frame
+    // pool's sw_format) lands in its images.
     bool readView(int outW, int outH, const FramePoseFn& perFrame, const float colorGrade[4],
                   FlatPath path, std::vector<uint8_t>& out,
                   AVFrame* vkDst, int64_t& pts_ms);

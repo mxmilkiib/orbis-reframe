@@ -99,9 +99,9 @@ public:
     bool tenBit() const;
 
     // An empty AV_PIX_FMT_VULKAN frame out of the encoder's frames pool, for
-    // the caller's GPU pipeline to fill (the fused view copies its NV12 into
-    // the frame's images on-device and advances its semaphore / layout
-    // bookkeeping). The frame keeps the pool's reference; hand it to
+    // the caller's GPU pipeline to fill (the fused view copies its NV12 or
+    // P010, per the pool's sw_format, into the frame's images on-device and
+    // advances its semaphore / layout bookkeeping). The frame keeps the pool's reference; hand it to
     // addVulkanFrame() or release it with av_frame_free(). Requires
     // vulkanEncodeAvailable().
     AVFrame* acquireVulkanFrame();
