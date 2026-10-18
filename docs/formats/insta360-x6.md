@@ -1,9 +1,11 @@
 # Insta360 X6 file format
 
-**Desk research (2026-10-15), no X6 file examined.** From public specs,
-Insta360's manuals and Gyroflow's telemetry-parser, set against what our code
-assumes. Written as differences from the X5 ([`insta360-x5.md`](insta360-x5.md),
-"X5 §n" below). Markers as in [`README.md`](README.md).
+**Desk research (2026-10-15) plus empirical findings (2026-10-18) from a
+test set of 24 clips (8K/6K/4K, standard and I-Log, fw v1.2.36).** From
+public specs, Insta360's manuals and Gyroflow's telemetry-parser, set against
+what our code assumes. Written as differences from the X5
+([`insta360-x5.md`](insta360-x5.md), "X5 §n" below). Markers as in
+[`README.md`](README.md).
 
 ## Files and streams
 
@@ -19,18 +21,26 @@ assumes. Written as differences from the X5 ([`insta360-x5.md`](insta360-x5.md),
   | 4K | 3840×1920 | 100 / 60 / 50 / 48 / 30 / 25 / 24 | 1920² |
 
 - The app names a clip's mode by its lens size (8K / 5.7K / 4K); 3008² has
-  no name yet.
-- 8K 50 is ~1.5 Gpx/s across both lenses, ~1.7× the X5's 8K 30 (X5 §3.3).
-  Real-time decode at that rate isn't measured.
+  no name yet. Clips at all three sizes (3840², 3008², 1920²) open and
+  stitch correctly ✅.
+- ✅ Vulkan decode+stitch on RADV does ~84 fps decode, ~35 fps full-res
+  7680-wide stitch, ~60 fps fused view on 8K30 (Strix Halo iGPU). 8K 50
+  (~1.5 Gpx/s) remains unmeasured.
 
 ## Colour: 10-bit, log and HDR
 
 - 📖 Colour modes Standard, **Dolby Vision** and **I-Log 10-bit**.
+- ✅ Every sample clip is H.265 Main 10 (`yuv420p10le`), VUI-tagged
+  `bt709` - **including the I-Log ones**. The stream-level colour
+  metadata does not mark I-Log; record 0x101 field 22 `gamma_mode` does:
+  `standard` vs `I_Log` (confirmed on 8K/6K/4K clips, fw v1.2.36). That
+  field is not parsed today, and nothing else consumes gamma.
 - The app's GPU stitch samples the decoder's pictures as 8-bit NV12
   (`VK_FORMAT_G8_B8R8_2PLANE_420_UNORM`) through a BT.709 full-range
   conversion. A 10-bit stream needs a second sampler format and shader
   variant; I-Log needs a log-to-linear conversion; Dolby Vision presumably
   BT.2020 with a PQ or HLG transfer (❓ unconfirmed) and a tone map.
+  An I-Log clip stitched correctly but flat (sat ~0.16 vs ~0.31).
 - The X5 has I-Log too (X5 §3.3), so the same work covers it.
 
 ## Trailer
@@ -50,10 +60,13 @@ assumes. Written as differences from the X5 ([`insta360-x5.md`](insta360-x5.md),
   lands too small and the equirect shows two inscribed discs with gaps.
 - ❌ **No field 145 lens-profile table** on the X6: `lens_profiles` is empty,
   so accessory names ("ProtectorA"/...) never resolve and the stitch always
-  runs as a bare lens at the default `fovDeg` 200. That produced correct
-  output on the sample clip; the X6's usable FOV may differ slightly.
+  runs as a bare lens at the default `fovDeg` 200. Stitched output at all
+  three resolutions shows continuous coverage, so 200° bare appears right;
+  accessory-guard correction is impossible without a profile source.
 - ❓ telemetry-parser has no X6-specific code; an unknown model gets its
-  default IMU orientation, `Xyz`. The IMU axis convention is unconfirmed.
+  default IMU orientation, `Xyz`. The accel/gyro ranges and ~1 kHz rate
+  parse fine at rest; the axis convention still needs a clip with
+  deliberate rotations to confirm.
 
 ## Sources
 
