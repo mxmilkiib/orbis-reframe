@@ -151,6 +151,16 @@ void VulkanVideoDecoder::deviceHandles(VkInstance& inst, VkPhysicalDevice& phys,
             }
 }
 
+VkFormat VulkanVideoDecoder::frameFormat()
+{
+    AVFrame* f = m_demux.peekFrame(0);
+    if (!f || !f->hw_frames_ctx)
+        return VK_FORMAT_UNDEFINED;
+    auto* fc = reinterpret_cast<AVHWFramesContext*>(f->hw_frames_ctx->data);
+    auto* vfc = reinterpret_cast<AVVulkanFramesContext*>(fc->hwctx);
+    return vfc->format[0];
+}
+
 void VulkanVideoDecoder::keyframesAroundMs(int64_t timestampMs, int64_t& before, int64_t& after) const
 {
     m_demux.keyframesAroundMs(timestampMs, before, after);

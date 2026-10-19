@@ -89,6 +89,13 @@ public:
     void deviceHandles(VkInstance& inst, VkPhysicalDevice& phys, VkDevice& dev,
                        uint32_t& computeQueueFamily, VkDeviceQueueCreateFlags& queueFlags) const;
 
+    // The VkFormat the decoder actually produces (peeks the first decoded
+    // frame's hw context) -- G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16 for a
+    // Main 10 stream, G8_B8R8_2PLANE_420_UNORM for 8-bit. VK_FORMAT_UNDEFINED
+    // if no frame can be peeked. More reliable than the stream's declared bit
+    // depth when metadata and the decoded surface disagree.
+    VkFormat frameFormat();
+
     // Frame-exact: the next readNextPair returns the frame at `timestampMs`.
     // A target a little ahead, with no keyframe since the last pair read,
     // decodes forward from there instead of from the keyframe again.
