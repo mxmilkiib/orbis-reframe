@@ -50,7 +50,7 @@ public:
         // A flat main-track clip (ClipItem::flat) drawn as a full-frame
         // layer: decoded at a larger size, with its colour grade.
         bool fullFrame = false;
-        std::array<float, 4> colorGrade{};
+        color::Grade colorGrade;
         // A title: this picture all along, nothing decoded (`path` empty).
         // Its look's width is the text size; the picture's width is that
         // times `stillWidthPerSize` (titlerender::Picture).

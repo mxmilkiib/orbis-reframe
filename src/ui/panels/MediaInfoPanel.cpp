@@ -146,6 +146,15 @@ void MediaInfoPanel::setInfo(const insv::MediaInfo &m)
             colour += QStringLiteral(", ");
         colour += v.fullRange ? tr("full range") : tr("limited range");
         addValue(tr("Colour"), colour);
+        if (const QString log = QString::fromStdString(m.logProfile()); !log.isEmpty())
+            addValue(tr("Colour profile"), log,
+                     tr("A log profile: the picture looks flat and grey until the LUT the "
+                        "camera maker publishes for %1 is applied (Colour section).")
+                         .arg(log));
+        else if (m.colorProfile == "standard")
+            addValue(tr("Colour profile"), tr("Standard"));
+        else if (!m.colorProfile.empty())
+            addValue(tr("Colour profile"), QString::fromStdString(m.colorProfile));
         const QString br = bitRate(v.bitRate);
         addValue(tr("Bitrate"), m.video.size() > 1 && !br.isEmpty() ? tr("%1 per lens").arg(br) : br);
     }

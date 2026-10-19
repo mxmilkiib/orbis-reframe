@@ -69,6 +69,12 @@ QString diagnostics(EquirectViewportWindow *viewport)
     out << QStringLiteral("Video encoder (export): %1")
                .arg(encoders.isEmpty() ? QStringLiteral("none found")
                                        : encoders.join(QLatin1String(", ")));
+    // Why the encoders tried before (or instead of) those can't be used.
+    for (const bool h265 : {true, false})
+        if (const std::string why = exportpipe::hwEncoderReport(h265); !why.empty())
+            out << QStringLiteral("  %1 not usable: %2")
+                       .arg(h265 ? QStringLiteral("H.265") : QStringLiteral("H.264"),
+                            QString::fromStdString(why));
 #ifdef ORBIS_REFRAME_HAVE_AUDIO
     out << QStringLiteral("Audio playback: built in");
 #else

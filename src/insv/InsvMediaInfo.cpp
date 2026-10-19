@@ -142,6 +142,7 @@ bool ProbeMediaInfo(const std::string& path, MediaInfo& out, std::string& err) {
         }
         out.exposureRecords = static_cast<int64_t>(tele->exposure.size());
         out.rollingShutterMs = tele->rolling_shutter_ms;
+        out.colorProfile = tele->gamma_mode;
         out.gpsRecords = static_cast<int64_t>(tele->gps_records);
         out.gpsFixes = static_cast<int64_t>(tele->gps_fixes);
         out.gpsRateHz = tele->gps_rate_hz;

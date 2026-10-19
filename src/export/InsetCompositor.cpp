@@ -256,7 +256,7 @@ bool InsetCompositor::layerAt(size_t i, int64_t timelineMs, bool nv12, Layer &la
     // output as NV12, decoded straight to it at the rect's size; anything
     // else is blended from RGBA.
     const bool copy = nv12 && copyable(rect, look.opacity, m_outW, m_outH);
-    const bool graded = j.colorGrade != std::array<float, 4>{};
+    const bool graded = !j.colorGrade.isNeutral();
     s.reader->setOutputFormat(copy && !graded ? FlatVideoReader::Format::Nv12
                                               : FlatVideoReader::Format::Rgba);
     if (copy) {
@@ -288,7 +288,7 @@ bool InsetCompositor::layerAt(size_t i, int64_t timelineMs, bool nv12, Layer &la
             s.graded.size() != bytes + Nv12Converter::kPadding) {
             s.graded.resize(bytes + Nv12Converter::kPadding);
             std::memcpy(s.graded.data(), f->rgba.data(), bytes);
-            GradeRgba(s.graded.data(), size_t(f->width) * f->height, j.colorGrade.data());
+            GradeRgba(s.graded.data(), size_t(f->width) * f->height, j.colorGrade);
             s.gradedFrom = f;
             s.gradedPts = f->ptsMs;
             s.gradedNv12Done = false;

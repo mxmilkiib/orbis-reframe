@@ -1,3 +1,64 @@
+## v0.4.0 (2026-10-18)
+
+### Feat
+
+- **export**: skip Vulkan encoders when the device is NVIDIA's
+- **export**: try VAAPI before Vulkan video
+- **export**: set VBR and quality hints on Vulkan and VA-API encoders
+- **export**: ORBIS_ENCODER env var pins the encoder backend
+- **export**: probe Vulkan and VA-API encoders when NVENC is absent
+- **export**: refuse to export when a source file is missing
+- **timeline**: crossfade and dip-to-black transitions at cuts
+- **timeline**: keyframe moves start and stop gently
+- **ui**: text titles on overlay tracks
+- **timeline**: keyframes ease fast to slow or slow to fast
+- **timeline**: duplicate a clip from its menu
+- **stitch**: lens guards and depth-aware seam per clip
+- **timeline**: flat videos on the main track, mixed with 360 clips
+
+### Fix
+
+- **export**: probe each encoder once, off the GUI thread, and say why none works
+- **export**: fall back to the next encoder when open fails
+- **render**: check the viewport's descriptor set layout, pools and sets
+- **build**: link OpenCV 5's features and geometry modules
+- **render**: size the stitch descriptor pool from the ycbcr sampler's count
+- **render**: build on FFmpeg before 9, name the right queue flag
+- **render**: adopt FFmpeg's Vulkan queue with its creation flags
+- **insv**: include features2d.hpp for goodFeaturesToTrack
+- **export**: missing overlay or sound files block the export too
+- **playback**: a cut changes the view and grade on the same frame as the picture
+- **ui**: tracking status shows under the Track subject button
+- **ui**: a new project starts from a blank view and default settings
+- **privacy**: saving removes plate scans no clip uses
+- **privacy**: each clip has its own plate scan
+- **privacy**: the plate blur shows only on the clip it's on
+- **playback**: a flat main-track clip can't be dragged out of place
+- **playback**: a flat clip's colour change shows while paused
+- **export**: overlay videos decoded at their own size no longer overrun the frame
+- **timeline**: draw linked clips' link mark as an icon, not an emoji
+
+### Refactor
+
+- **privacy**: the plate scanner's geometry and quad tracker apart
+- **playback**: the decoder thread apart from the controller
+- **timeline**: split the timeline widget into layout, paint and input
+- **render**: the viewport's renderer apart from its window
+- remove dead code found by a whole-build link check
+- **render**: stitcher setup apart from its per-frame work
+- **ui**: split MainWindow's constructor into its parts
+- **timeline**: adding track files out of MainWindow
+- **ui**: project saving and its dialogs out of MainWindow
+- **ui**: media import and Locate file out of MainWindow
+- **export**: render jobs and the export runner out of MainWindow
+- **privacy**: the blur's data side out of MainWindow
+- **ui**: keyboard shortcut help dialog out of MainWindow
+- **ui**: stabilizer cache and clip measurements out of MainWindow
+
+### Perf
+
+- **export**: flat clips export many times faster
+
 ## v0.3.0 (2026-10-14)
 
 ### Feat

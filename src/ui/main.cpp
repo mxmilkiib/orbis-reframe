@@ -18,6 +18,7 @@
 #include "../core/DataPaths.h"
 #include "../core/Log.h"
 #include "../core/Version.h"
+#include "../export/ReframeFlatten.h"
 
 #ifdef INSV_HAVE_VOICE
 #include <VoiceIsolator.h>
@@ -170,14 +171,20 @@ int main(int argc, char *argv[])
         const QString text =
             vulkanProblem + QLatin1Char(' ') +
             QObject::tr("orbis-reframe needs a graphics card with Vulkan support.\n\n"
-                        "With an NVIDIA card, install the NVIDIA driver with its Vulkan support "
-                        "(on Debian: sudo apt install nvidia-driver nvidia-vulkan-icd) and restart "
-                        "the computer. \"vulkaninfo --summary\" (package vulkan-tools) should then "
-                        "list the card.");
+                        "Install the card's Vulkan driver and restart the computer. With an "
+                        "NVIDIA card, on Debian: sudo apt install nvidia-driver nvidia-vulkan-icd. "
+                        "With AMD or Intel: sudo apt install mesa-vulkan-drivers. "
+                        "\"vulkaninfo --summary\" (package vulkan-tools) should then list the "
+                        "card.");
         std::fprintf(stderr, "%s\n", text.toLocal8Bit().constData());
         QMessageBox::critical(nullptr, QStringLiteral("orbis-reframe"), text);
         return 1;
     }
+
+    // The export encoder probe (a throwaway encoder open per backend, a
+    // Vulkan / VAAPI device each on AMD and Intel) on its own thread, so it
+    // doesn't hold up the window; the startup warning waits for it.
+    exportpipe::probeHwEncodersInBackground();
 
     MainWindow window(&vulkanInstance);
     window.resize(1280, 760);

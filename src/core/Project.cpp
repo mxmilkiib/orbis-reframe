@@ -168,17 +168,22 @@ json reframeToJson(const ReframeTrack &track)
     return json{{"keys", std::move(keys)}};
 }
 
-json colorGradeToJson(const ColorGrade &g)
+json colorGradeToJson(const ColorGrade &g, const QDir *projectDir)
 {
-    return json{
+    json j{
         {"exposureEv", g.exposureEv},
         {"contrast", g.contrast},
         {"saturation", g.saturation},
         {"temperature", g.temperature},
     };
+    if (!g.lut.isEmpty()) {
+        j["lut"] = (projectDir ? storedPath(g.lut, *projectDir) : g.lut).toStdString();
+        j["lutStrength"] = g.lutStrength;
+    }
+    return j;
 }
 
-ColorGrade colorGradeFromJson(const json &j)
+ColorGrade colorGradeFromJson(const json &j, const QDir *projectDir)
 {
     ColorGrade g; // defaults for any missing field
     if (!j.is_object())
@@ -187,6 +192,11 @@ ColorGrade colorGradeFromJson(const json &j)
     g.contrast = j.value("contrast", g.contrast);
     g.saturation = j.value("saturation", g.saturation);
     g.temperature = j.value("temperature", g.temperature);
+    const QString lut = QString::fromStdString(j.value("lut", std::string()));
+    if (!lut.isEmpty()) {
+        g.lut = projectDir ? resolvedPath(lut, *projectDir) : lut;
+        g.lutStrength = j.value("lutStrength", g.lutStrength);
+    }
     return g;
 }
 
@@ -861,6 +871,7 @@ QByteArray Project::buildDocument(const QDir *projectDir) const
 {
     json clips = json::array();
     bool anyFlat = false;
+    bool anyLut = false;
     // The first 360 clip's stitch settings, and whether every 360 clip has
     // them (else an older build, which reads one setting for all, misreads).
     const ClipItem *firstStitched = nullptr;
@@ -880,9 +891,10 @@ QByteArray Project::buildDocument(const QDir *projectDir) const
                 {"fps", c.fps},
                 {"sourceWidth", c.sourceWidth},
                 {"sourceHeight", c.sourceHeight},
-                {"color", colorGradeToJson(c.color)},
+                {"color", colorGradeToJson(c.color, projectDir)},
                 {"speed", c.speed},
             });
+            anyLut = anyLut || !c.color.lut.isEmpty();
             if (c.fit == ClipItem::Fit::Fill)
                 clips.back()["fit"] = "fill";
             continue;
@@ -896,11 +908,12 @@ QByteArray Project::buildDocument(const QDir *projectDir) const
             {"sourceWidth", c.sourceWidth},
             {"sourceHeight", c.sourceHeight},
             {"reframe", reframeToJson(c.reframe)},
-            {"color", colorGradeToJson(c.color)},
+            {"color", colorGradeToJson(c.color, projectDir)},
             {"speed", c.speed},
             {"stabilization", stabilizationToJson(c.stabilization)},
             {"stitch", json{{"lensGuard", lensGuardName(c.lensGuard)}, {"depthSeam", c.depthSeam}}},
         });
+        anyLut = anyLut || !c.color.lut.isEmpty();
         if (!firstStitched)
             firstStitched = &c;
         else if (c.lensGuard != firstStitched->lensGuard || c.depthSeam != firstStitched->depthSeam)
@@ -1001,7 +1014,8 @@ QByteArray Project::buildDocument(const QDir *projectDir) const
     }
     json doc = {
         {"format", kFormatTag},
-        {"version", !transitions.empty()    ? kTransitionFormatVersion
+        {"version", anyLut                  ? kLutFormatVersion
+                    : !transitions.empty()    ? kTransitionFormatVersion
                     : anyTitle                ? kTitleFormatVersion
                     : anyFlat || mixedStitch ? kFlatClipFormatVersion
                                              : kPlainFormatVersion},
@@ -1085,7 +1099,7 @@ bool Project::applyDocument(const QByteArray &text, const QDir *projectDir, QStr
             if (jc.contains("noise"))
                 pc.noise = noiseFromJson(jc.at("noise"));
             if (jc.contains("color"))
-                pc.color = colorGradeFromJson(jc.at("color"));
+                pc.color = colorGradeFromJson(jc.at("color"), projectDir);
             pc.speed = jc.value("speed", 1.0);
             pc.flat = jc.value("flat", false);
             if (pc.flat && jc.value("fit", std::string()) == "fill")
@@ -1352,7 +1366,9 @@ bool Project::copyFile(const QString &from, const QString &to, QString *error)
     } catch (const std::exception &e) {
         return fail(QStringLiteral("%1 is not a valid project file: %2").arg(from, e.what()));
     }
-    // Every media path in every version is a "source" string.
+    // Every media path in every version is a "source" string. A clip's
+    // "lut" stays as it is: a project folder's copy brings its luts/ along,
+    // and a loose project's copy goes beside it.
     const QDir fromDir = QFileInfo(from).absoluteDir();
     const QDir toDir = QFileInfo(to).absoluteDir();
     std::function<void(json &)> relocate = [&](json &j) {

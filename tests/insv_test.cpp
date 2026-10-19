@@ -571,12 +571,15 @@ std::string writeX5Trailer(const char* name, const std::vector<TrailerRecord>& r
 
 // Record 0x101: the maker-notes strings first (tag, 1-byte length -- what
 // ParseMakerNotes reads), then the protobuf fields timing and IMU scaling use,
-// the extended calibration (field 111) and the lens-profile table (145).
+// the colour profile (22; the raw-gyro one is filmed in I-Log, the other has
+// none), the extended calibration (field 111) and the lens-profile table (145).
 std::vector<uint8_t> metadataRecord(bool rawGyro)
 {
     Bytes m;
     m.pbString(1, "IAHEA2500000001").pbString(2, "Insta360 X5").pbString(3, "v1.5.6_build1");
     m.pbString(5, "2_1.0_2.0_3.0");
+    if (rawGyro)
+        m.pbString(22, "I_Log");
     m.pbVarint(24, 2468081984ull);
     m.pbDouble(25, 21.244);
     m.pbDouble(28, 1.6);
@@ -670,6 +673,7 @@ void testTrailerRecords()
         CHECK(t->first_frame_timestamp == 2468081984ull);
         CHECK(near(t->rolling_shutter_ms, 21.244, 1e-12));
         CHECK(near(t->gyro_timestamp_ms, 1.6, 1e-12));
+        CHECK(t->gamma_mode == "I_Log");
         CHECK(t->imu.size() == 3);
         if (t->imu.size() == 3) {
             CHECK(t->imu[1].timestamp == 1001000);
@@ -711,6 +715,7 @@ void testTrailerRecords()
     if (td && td->imu.size() == 2)
         CHECK(td->imu[1].timestamp == 5001 && td->imu[1].accel[2] == 1.0 && td->imu[1].gyro[2] == 0.3);
     CHECK(td && td->exposure.empty() && td->gps_records == 0 && td->time_map_offset_ms == 0.0);
+    CHECK(td && td->gamma_mode.empty()); // no field 22
     std::filesystem::remove(d);
 
     // No trailer (no magic), no moov: nothing, and no crash.

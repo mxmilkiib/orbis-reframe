@@ -6,6 +6,7 @@
 // those two include it.
 
 #include "VulkanFisheyeStitcher.h"
+#include "VulkanLut.h"
 
 #include <SeamDepth.h> // insv::SeamCosts, the cost pass's candidates / patch
 
@@ -73,8 +74,9 @@ struct ReframePush {
     float _pad[3];
     float stab[12];      // 3 columns, each a vec3 padded to 16 bytes (col-major)
     float colorGrade[4]; // exposureEv, contrast%, saturation%, temperature%
+    float colorLut[4];   // VulkanLutStore::pushValues
 };
-static_assert(sizeof(ReframePush) == 112, "ReframePush must match the compute push_constant block");
+static_assert(sizeof(ReframePush) == 128, "ReframePush must match the compute push_constant block");
 
 // Push constants for fisheye_view_nv12.comp: 4 ints + 5 floats, pad, then the
 // stab mat3 as padded columns and the grade -- the same tail as ReframePush.
@@ -93,8 +95,9 @@ struct ViewPush {
     int32_t stride; // ... and the canvas row length; 0 = outW
     float stab[12];
     float colorGrade[4];
+    float colorLut[4];
 };
-static_assert(sizeof(ViewPush) == 112, "ViewPush must match the compute push_constant block");
+static_assert(sizeof(ViewPush) == 128, "ViewPush must match the compute push_constant block");
 
 // The exportable lens ring (render::LensFrame). Shared-owned: the stitcher
 // holds it, and so does every LensSlot handle given out (its deleter marks the
@@ -165,12 +168,13 @@ struct VulkanFisheyeStitcher::Impl {
 
     VkSampler sampler = VK_NULL_HANDLE;
     VkSamplerYcbcrConversion ycbcr = VK_NULL_HANDLE; // nv12 mode only
-    VkFormat ycbcrFormat = VK_FORMAT_UNDEFINED;      // the format `ycbcr` was made for
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
     VkDescriptorPool descPool = VK_NULL_HANDLE;
     VkDescriptorSet descSet = VK_NULL_HANDLE;
     VkPipelineLayout pipeLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
+    // The grade's LUTs (set 1 of the reproject and view pipelines).
+    VulkanLutStore luts;
 
     bool adopted = false; // device is FFmpeg's -- don't destroy it
     // Adopted: FFmpeg's lock on `queue` -- the device is shared by every
@@ -200,6 +204,10 @@ struct VulkanFisheyeStitcher::Impl {
     std::shared_ptr<void> keepAlive;
     std::shared_ptr<LensRingCore> ring;
     bool nv12 = false;    // stitchVk path: sample decoder NV12 images via ycbcr
+    // The decoder's 2-plane format, the ycbcr conversion's: NV12, or P010
+    // for 10-bit (initAdopt). Every image it hands over must have it.
+    VkFormat lensFormat = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+    bool deepLens() const { return lensFormat != VK_FORMAT_G8_B8R8_2PLANE_420_UNORM; }
     // Cached ycbcr image views over the decoder's pooled images (nv12 mode).
     std::map<VkImage, VkImageView> nv12Views;
 

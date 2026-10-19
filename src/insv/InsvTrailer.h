@@ -86,6 +86,10 @@ struct InsvTelemetry {
     double gyro_timestamp_ms = 0;
     // Field 25: sensor rolling-shutter readout time, ms (varies per mode).
     double rolling_shutter_ms = 0;
+    // Field 22: the colour profile the clip was filmed in -- "standard", or
+    // "I_Log" for Insta360's log profile (§3.3; the stream itself is tagged
+    // the same either way). Empty when absent.
+    std::string gamma_mode;
     // Record 128 (TimeMap), written by Insta360 software on trimmed exports:
     // the original recording time (ms) of this file's video at t = 0. Field
     // 24 still names the *original* first frame, so a trimmed file's video

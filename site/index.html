@@ -146,7 +146,7 @@
       virtual camera through the sphere over time and get a normal flat video out of a
       360° recording.</p>
     <ul class="tags">
-      <li>Qt 6</li><li>Vulkan</li><li>FFmpeg + NVENC</li><li>Wayland</li><li>No closed-source dependencies</li>
+      <li>Qt 6</li><li>Vulkan</li><li>FFmpeg + hardware encode</li><li>Wayland</li><li>No closed-source dependencies</li>
     </ul>
   </div>
 </header>
@@ -173,7 +173,8 @@
     <div class="wrap">
       <h2>Status: “works on my computer”</h2>
       <p>A work in progress, built and tested on one machine: Debian Testing, an NVIDIA RTX GPU,
-        Wayland and Sway. The <a href="https://github.com/Schabo/orbis-reframe/releases">releases</a> are a <code>.deb</code> and a
+        Wayland and Sway. AMD and Intel GPUs are supported best-effort: a contributor has run it on
+        an AMD Radeon; Intel hasn't been tried. The <a href="https://github.com/Schabo/orbis-reframe/releases">releases</a> are a <code>.deb</code> and a
         tarball each for Debian Testing, Debian 13 and Ubuntu 26.04 LTS; other setups that meet the requirements should work but haven't
         been tried. Found a problem? <a href="https://github.com/Schabo/orbis-reframe/issues">Report it on GitHub</a>.</p>
       <div class="note">
@@ -224,7 +225,7 @@
             <li>Opens X5 <code>.insv</code> files directly, in every capture mode tested so far
               (8K, 5.7K/5.7K+, 5.7K 60, 4K 120).</li>
             <li>Real-time playback: Vulkan video decode, then a Vulkan compute fisheye→view pass on
-              NVIDIA GPUs, with CPU fallbacks.</li>
+              the GPU, with CPU fallbacks.</li>
             <li>Interactive 360° viewport: drag to look around during playback and while scrubbing.</li>
             <li>The viewport renders straight from the fisheyes at full source detail.</li>
           </ul>
@@ -235,6 +236,8 @@
             <li>Keyframed virtual camera: yaw, pitch, roll and field of view, interpolated between
               keyframes.</li>
             <li>Set keyframes by dragging the viewport or by typing values into the sidebar.</li>
+            <li>Easing per keyframe (Linear, Fast to slow, Slow to fast), and moves that start and
+              stop gently instead of abruptly.</li>
             <li><strong>Track subject</strong>: draw a box around a rider, car or anything else, and
               the camera follows it through the sphere. Tracking plays back live, with the box green
               while the subject is found and red when it's lost, and you stop it when you've seen
@@ -244,8 +247,11 @@
         <div class="card">
           <h3>Timeline</h3>
           <ul>
-            <li>Multiple clips with trim in/out, split, reorder and hard cuts, from the keyboard or
+            <li>Multiple clips with trim in/out, split, duplicate and reorder, from the keyboard or
               the edit toolbar above the timeline.</li>
+            <li>Flat videos (from a phone or an action camera) on the video track too, mixed with
+              360° clips, shown whole with bars or filling the frame.</li>
+            <li>Transitions at cuts: crossfade or dip to black.</li>
             <li>Per-clip playback speed (0.1–4×) with pitch-preserving audio time-stretch.</li>
             <li>Any number of audio and video (overlay) tracks, which can be renamed, reordered,
               muted, zoomed and scrolled. Tracks keep to fixed groups, and a video track folds its
@@ -259,7 +265,7 @@
           </ul>
         </div>
         <div class="card">
-          <h3>Picture-in-picture</h3>
+          <h3>Picture-in-picture and titles</h3>
           <ul>
             <li>Flat video files on overlay tracks, drawn as insets over the reframed view: position,
               size, opacity, rounded corners and a border.</li>
@@ -267,6 +273,8 @@
             <li>Keyframe an inset's position, size and opacity, and bring an overlay forward or send
               it back. An overlay's own sound comes along on its own track, linked like a video
               clip's.</li>
+            <li>Text titles on overlay tracks: font, colour, position and size, keyframed and faded
+              like an inset.</li>
           </ul>
         </div>
         <div class="card">
@@ -284,7 +292,8 @@
           <ul>
             <li>Based on the MEI fisheye model, using the per-camera calibration stored in each
               file.</li>
-            <li>Lens-protector profiles and a per-clip seam fine-tune.</li>
+            <li>Lens-guard profiles and a seam fine-tune per clip, so clips filmed with and without
+              lens guards mix in one project.</li>
             <li>Depth-aware seam: the stitch distance is measured along the seam every frame, so near
               objects (the bike, handlebars, hands) aren't doubled.</li>
           </ul>
@@ -315,8 +324,9 @@
         <div class="card">
           <h3>Output</h3>
           <ul>
-            <li>Flat reframed export of the whole timeline to H.264/H.265 via NVENC, with the
-              overlays composited in and the audio mixed.</li>
+            <li>Flat reframed export of the whole timeline to H.264/H.265 on the GPU's hardware
+              encoder (NVENC on NVIDIA, VA-API or Vulkan video on AMD and Intel), with the overlays
+              and titles composited in and the audio mixed.</li>
             <li>Project settings: aspect ratio (16:9, 9:16, 1:1, 4:3), resolution and frame rate;
               the viewport is letterboxed to match.</li>
             <li>Screenshot of the current view at project resolution (PNG), from the player
@@ -337,8 +347,8 @@
           </ul>
         </div>
       </div>
-      <p style="margin-top:20px"><strong>Planned next:</strong> flat videos as the main video,
-        transitions, titles and an effects library. Further out: a “tiny planet” projection and
+      <p style="margin-top:20px"><strong>Planned next:</strong> other 360° cameras (other Insta360
+        models, DJI, GoPro) and an effects library. Further out: a “tiny planet” projection and
         face blur.</p>
     </div>
   </section>
@@ -396,7 +406,7 @@
           <a href="https://github.com/Tencent/ncnn">ncnn</a>.</li>
       </ul>
       <p>Built with <a href="https://www.qt.io/">Qt 6</a>, <a href="https://www.vulkan.org/">Vulkan</a>,
-        <a href="https://ffmpeg.org/">FFmpeg</a> (demux, decode, NVENC encode, audio, time-stretch),
+        <a href="https://ffmpeg.org/">FFmpeg</a> (demux, decode, hardware encode, audio, time-stretch),
         <a href="https://github.com/KhronosGroup/glslang">glslang</a> (shader compiler),
         <a href="https://github.com/nlohmann/json">nlohmann/json</a>, optionally
         <a href="https://opencv.org/">OpenCV</a> (analysis tools, subject tracking) and

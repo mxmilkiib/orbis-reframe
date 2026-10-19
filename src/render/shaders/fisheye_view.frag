@@ -9,8 +9,9 @@
 //
 // The lenses arrive as plain plane images shared from the decoder's device
 // (render::LensFrame): Y (R8) and interleaved CbCr (R8G8, half size) per
-// lens, converted here with the same BT.709 full-range matrix and midpoint
-// chroma siting the stitch's ycbcr sampler uses. Params (binding 0) is the
+// lens -- R16 / R16G16 for 10-bit pictures -- converted here with the same
+// BT.709 full-range matrix and midpoint chroma siting the stitch's ycbcr
+// sampler uses. Params (binding 0) is the
 // stitch's own UBO for this frame, packed on the decoder side, and the
 // photometric gains were measured there too.
 
@@ -22,11 +23,29 @@ layout(binding = 2) uniform sampler2D lens0UV;
 layout(binding = 3) uniform sampler2D lens1Y;
 layout(binding = 4) uniform sampler2D lens1UV;
 
-// BT.709 full range ("ITU_FULL"): chroma is offset by 128/255.
+layout(push_constant) uniform PushConstants {
+    float yaw;
+    float pitch;
+    float roll;
+    float fovY;
+    float aspect;
+    // 12 bytes of std140 padding (mat3 aligns at offset 32).
+    mat3 stab;       // gyro de-rotation in the sphere frame, after the pose
+    vec4 colorGrade; // exposureEv, contrast%, saturation%, temperature%
+    vec4 colorLut;   // the clip's LUT: mix, domain min / max (color_grade.glsl)
+    vec4 gains;      // x, y: photometric gain of lens 0 / 1; z: the planes' sample
+                     // scale, w: the chroma midpoint (8-bit: 1, 128/255; 10-bit:
+                     // 65535/65472, 512/1023 -- full range at that depth)
+} pc;
+
+// BT.709 full range ("ITU_FULL"): chroma is offset by 2^(n-1) / (2^n - 1),
+// 128/255 at 8 bits (pc.gains.w; the scale pc.gains.z first).
 vec3 ycbcrToRgb(float y, vec2 cbcr)
 {
-    float cb = cbcr.x - 128.0 / 255.0;
-    float cr = cbcr.y - 128.0 / 255.0;
+    y *= pc.gains.z;
+    cbcr *= pc.gains.z;
+    float cb = cbcr.x - pc.gains.w;
+    float cr = cbcr.y - pc.gains.w;
     return vec3(y + 1.5748 * cr, y - 0.1873 * cb - 0.4681 * cr, y + 1.8556 * cb);
 }
 
@@ -39,18 +58,6 @@ vec3 sampleLens(int i, vec2 uv)
                     : ycbcrToRgb(texture(lens1Y, uv).r, texture(lens1UV, uv).rg);
     return clamp(c, 0.0, 1.0) * 255.0;
 }
-
-layout(push_constant) uniform PushConstants {
-    float yaw;
-    float pitch;
-    float roll;
-    float fovY;
-    float aspect;
-    // 12 bytes of std140 padding (mat3 aligns at offset 32).
-    mat3 stab;       // gyro de-rotation in the sphere frame, after the pose
-    vec4 colorGrade; // exposureEv, contrast%, saturation%, temperature%
-    vec4 gains;      // x, y: photometric gain of lens 0 / 1
-} pc;
 
 #define FISHEYE_STITCH_NO_MAIN
 #define FISHEYE_STITCH_NO_BUFFERS
@@ -71,5 +78,5 @@ void main() {
 
     vec3 dir = mul3(P.outRot[0], P.outRot[1], P.outRot[2], sphereDir);
     vec3 rgb = blurredLenses(dir, pc.gains.x, pc.gains.y) / 255.0;
-    outColor = vec4(gradeColor(rgb, pc.colorGrade, 1.0), 1.0);
+    outColor = vec4(gradeColor(rgb, pc.colorGrade, pc.colorLut, 1.0), 1.0);
 }

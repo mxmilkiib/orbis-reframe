@@ -91,7 +91,9 @@ EquirectViewportRenderer::importFor(const render::LensFrame &f)
     LensImport imp;
     for (int i = 0; i < render::LensSlot::kImages; ++i) {
         const bool uv = (i & 1) != 0;
-        const VkFormat fmt = uv ? VK_FORMAT_R8G8_UNORM : VK_FORMAT_R8_UNORM;
+        const bool deep = slot.bitDepth > 8; // 10-bit: 16-bit planes
+        const VkFormat fmt = deep ? (uv ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R16_UNORM)
+                                  : (uv ? VK_FORMAT_R8G8_UNORM : VK_FORMAT_R8_UNORM);
         // Must match the exporter's image exactly (VulkanFisheyeStitcher).
         VkExternalMemoryImageCreateInfo emi{};
         emi.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
@@ -443,6 +445,15 @@ void EquirectViewportRenderer::startNextFrame()
         slot.key = d.frameKey;
     }
 
+    // The grades' LUTs: uploaded on first use (their own submissions), so
+    // before the render pass is recorded.
+    const color::Grade grade = m_window->CurrentColorGrade();
+    const VkDescriptorSet lutSet = m_luts.setFor(grade.hasLut() ? grade.lut : nullptr);
+    VkDescriptorSet insetLutSets[EquirectViewportWindow::kMaxInsets] = {};
+    for (size_t i = 0; i < insets.size(); ++i)
+        insetLutSets[i] =
+            m_luts.setFor(insets[i].colorGrade.hasLut() ? insets[i].colorGrade.lut : nullptr);
+
     const QSize size = m_window->swapChainImageSize();
 
     // One clear value per attachment the default render pass clears: colour,
@@ -464,15 +475,21 @@ void EquirectViewportRenderer::startNextFrame()
     beginInfo.pClearValues = clearValues;
 
     vkCmdBeginRenderPass(commandBuffer, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
+    // Without the equirect texture's set (its creation failed, logged in
+    // initResources) the equirect preview isn't drawn, only the surround;
+    // the view straight from the fisheyes still is.
+    const bool drawPicture =
+        imp || (m_pipeline != VK_NULL_HANDLE && m_descriptorSet != VK_NULL_HANDLE);
     if (imp) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_lensPipeline);
+        const VkDescriptorSet sets[2] = {m_lensSets[frameSlot], lutSet};
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            m_lensPipelineLayout, 0, 1, &m_lensSets[frameSlot], 0,
-                                            nullptr);
-    } else {
+                                            m_lensPipelineLayout, 0, 2, sets, 0, nullptr);
+    } else if (drawPicture) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+        const VkDescriptorSet sets[2] = {m_descriptorSet, lutSet};
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+                                            m_pipelineLayout, 0, 2, sets, 0, nullptr);
     }
 
     // Letterbox / pillarbox the picture to the project's output aspect: the
@@ -522,20 +539,29 @@ void EquirectViewportRenderer::startNextFrame()
         pc.stab[col * 4 + 2] = stabRm[2 * 3 + col];
         pc.stab[col * 4 + 3] = 0.0f;
     }
-    m_window->ColorGradeArr(pc.colorGrade);
+    std::copy(grade.adjust.begin(), grade.adjust.end(), pc.colorGrade);
+    render::VulkanLutStore::pushValues(grade.hasLut() ? grade.lut.get() : nullptr, grade.lutMix,
+                                       pc.colorLut);
     if (imp) {
         LensPushConstants lpc{};
         lpc.view = pc;
         lpc.gains[0] = m_currentLens->gain[0];
         lpc.gains[1] = m_currentLens->gain[1];
+        // The planes' sample scale and full-range chroma midpoint
+        // (fisheye_view.frag): 8-bit 1 and 128/255; 10-bit in 16-bit planes
+        // (the value at the top) 65535/65472, so 1023 reads as 1, and 512/1023.
+        const bool deep = m_currentLens->slot->bitDepth > 8;
+        lpc.gains[2] = deep ? 65535.0f / 65472.0f : 1.0f;
+        lpc.gains[3] = deep ? 512.0f / 1023.0f : 128.0f / 255.0f;
         vkCmdPushConstants(commandBuffer, m_lensPipelineLayout,
                                         VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(lpc), &lpc);
-    } else {
+    } else if (drawPicture) {
         vkCmdPushConstants(commandBuffer, m_pipelineLayout,
                                         VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &pc);
     }
 
-    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+    if (drawPicture)
+        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 
     // The privacy-blur region outlines, on the picture (under the insets):
     // each scissored to its own bounds, so a pass costs only its pixels.
@@ -598,8 +624,9 @@ void EquirectViewportRenderer::startNextFrame()
                                           m_insetPipeline);
             insetBound = true;
         }
+        const VkDescriptorSet sets[2] = {slot.set, insetLutSets[i]};
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                            m_insetPipelineLayout, 0, 1, &slot.set, 0, nullptr);
+                                            m_insetPipelineLayout, 0, 2, sets, 0, nullptr);
         InsetPushConstants ipc{};
         ipc.rect[0] = float(r.x);
         ipc.rect[1] = float(r.y);
@@ -613,7 +640,9 @@ void EquirectViewportRenderer::startNextFrame()
         ipc.borderColor[1] = ((d.frame.borderRgb >> 8) & 0xff) / 255.0f;
         ipc.borderColor[2] = (d.frame.borderRgb & 0xff) / 255.0f;
         ipc.borderColor[3] = d.look.opacity;
-        std::copy(d.colorGrade.begin(), d.colorGrade.end(), ipc.grade);
+        std::copy(d.colorGrade.adjust.begin(), d.colorGrade.adjust.end(), ipc.grade);
+        render::VulkanLutStore::pushValues(d.colorGrade.hasLut() ? d.colorGrade.lut.get() : nullptr,
+                                           d.colorGrade.lutMix, ipc.lut);
         vkCmdPushConstants(commandBuffer, m_insetPipelineLayout,
                                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ipc), &ipc);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);

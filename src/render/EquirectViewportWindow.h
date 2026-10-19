@@ -14,6 +14,7 @@
 #include <QRectF>
 #include <QVulkanWindow>
 
+#include "ColorLut.h" // color::Grade
 #include "LensFrame.h"
 #include "../core/InsetGeometry.h"
 
@@ -31,7 +32,7 @@ struct ViewportFrameView {
     bool hasPose = false; // else the view stays (free look, a drag)
     float pose[4] = {0.0f, 0.0f, 0.0f, 1.309f}; // yaw, pitch, roll, fovY
     bool hasGrade = false;
-    float grade[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // ColorGrade::packed()
+    color::Grade grade; // ColorGrade::render()
 };
 
 class EquirectViewportWindow : public QVulkanWindow {
@@ -112,7 +113,7 @@ public:
         inset::Look look; // fades applied to the opacity
         inset::Frame frame;
         double aspect = 16.0 / 9.0; // the video's display aspect (sizes the rect)
-        std::array<float, 4> colorGrade{}; // ColorGrade::packed(); a flat main clip's
+        color::Grade colorGrade; // ColorGrade::render(); a flat main clip's
         bool locked = false; // a flat main clip: fills its place, can't be picked or dragged
     };
     void SetInsets(std::vector<InsetDraw> insets);
@@ -148,10 +149,11 @@ public:
     void SetStabilization(const float rowMajor3x3[9]);
     void StabRowMajor(float out[9]) const;
 
-    // Colour panel: {exposureEv, contrast%, saturation%, temperature%},
-    // nullptr / all-zero = neutral. Plain float writes, like SetStabilization.
-    void SetColorGrade(const float grade[4]);
-    void ColorGradeArr(float out[4]) const;
+    // Colour panel: the LUT and the four adjustments; nullptr = neutral.
+    // Under a lock (the LUT is shared-owned): any thread sets, the renderer
+    // reads.
+    void SetColorGrade(const color::Grade *grade);
+    color::Grade CurrentColorGrade() const;
     // For the renderer: SetSurroundColor's value.
     const float *SurroundColor() const { return m_surround; }
 
@@ -285,7 +287,8 @@ private:
     bool m_pendingHasStab = false;
     std::vector<RegionOutline> m_pendingOutlines; // with the pending frame, guarded by m_frameMutex
     std::vector<RegionOutline> m_outlines;        // the shown frame's; renderer thread
-    float m_colorGrade[4] = {0, 0, 0, 0};  // exposureEv, contrast, saturation, temperature
+    mutable QMutex m_gradeMutex;
+    color::Grade m_colorGrade; // guarded by m_gradeMutex
     float m_surround[3] = {0, 0, 0};
     float m_markerColors[3][3] = {{1.0f, 0.8f, 0.1f}, {0.2f, 0.9f, 0.3f}, {1.0f, 0.25f, 0.2f}};
     float m_outputAspect = 16.0f / 9.0f;   // project output width / height

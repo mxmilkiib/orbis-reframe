@@ -11,7 +11,8 @@ supported yet. If you have one, short clips from it help add it:
 
 > **Early software.** orbis-reframe has been built and tested on one computer
 > so far (Debian Testing, an NVIDIA RTX 5070, the Sway desktop; the Debian 13
-> and Ubuntu 26.04 builds in containers of those systems on that computer). Other setups that meet
+> and Ubuntu 26.04 builds in containers of those systems on that computer).
+> One contributor has also run it on an AMD Radeon. Other setups that meet
 > the requirements below should work but haven't been tried.
 
 ## 1. Check your computer
@@ -20,7 +21,7 @@ supported yet. If you have one, short clips from it help add it:
 |---|---|
 | **Operating system** | Linux, 64-bit (x86_64): **Debian 13** ("trixie"), **Debian Testing** or **Ubuntu 26.04 LTS**. There is a separate build for each, because each needs the library versions of its own release (Debian 13: Qt 6.8, FFmpeg 7.1; Testing: Qt 6.10, FFmpeg 9; Ubuntu 26.04: Qt 6.10, FFmpeg 8). Download the one for your system. None of them starts on older releases, such as Ubuntu 24.04, whose versions differ. To see which system you have: `grep -E '^(ID\|VERSION_ID)=' /etc/os-release` prints `ID=debian` and `VERSION_ID="13"` on Debian 13, `ID=debian` and no `VERSION_ID` on Testing, and `ID=ubuntu` and `VERSION_ID="26.04"` on Ubuntu 26.04. |
 | **Desktop session** | **Wayland**: Sway, GNOME, KDE Plasma or another Wayland desktop. An X11 session doesn't work: orbis-reframe exits at startup instead of falling back to X11. |
-| **Graphics card** | **NVIDIA**, with the proprietary driver. Playback uses Vulkan (including Vulkan video decoding) and export uses NVIDIA's hardware encoder (NVENC). Tested on an RTX 5070 with driver 595. Other NVIDIA cards from the GTX 16 / RTX 20 series onwards should work. AMD and Intel graphics are not supported: playback may fall back to the processor, but export won't work at all. |
+| **Graphics card** | A card with **Vulkan**, including Vulkan video decoding. Export uses the card's hardware encoder: NVENC on NVIDIA, VAAPI or Vulkan video on AMD and Intel. **NVIDIA** with the proprietary driver is what orbis-reframe is tested on (an RTX 5070, driver 595); other NVIDIA cards from the GTX 16 / RTX 20 series onwards should work. **AMD** and **Intel** use the Mesa drivers that come with the system, and are supported best-effort: a contributor has tested playback and export on an AMD Radeon 8060S (Mesa 26.2); other AMD cards and Intel GPUs haven't been tried. If something doesn't work on yours, please [report it](#if-it-doesnt-start). |
 | **Memory** | 16 GB RAM or more. 8K clips are large. |
 | **Sound** | PipeWire (with `pipewire-pulse`) or PulseAudio. This is the default on current desktops. |
 
@@ -28,16 +29,22 @@ To check your session and graphics card, run these in a terminal:
 
 ```sh
 echo $XDG_SESSION_TYPE          # should print: wayland
-nvidia-smi                      # should list your NVIDIA card and driver version
-vulkaninfo --summary | grep -i nvidia   # should show the card as a Vulkan device
+vulkaninfo --summary | grep deviceName   # should name your graphics card
+vulkaninfo | grep video_decode_h265      # should print VK_KHR_video_decode_h265
 ```
 
-`vulkaninfo` comes from the `vulkan-tools` package.
+`vulkaninfo` comes from the `vulkan-tools` package. If the second command
+names only `llvmpipe`, Vulkan runs on the processor: the driver for the
+card is missing (step 2).
 
-## 2. Install the NVIDIA driver
+## 2. Install the graphics driver
 
-If `nvidia-smi` above already worked and `vulkaninfo` showed the card, go on
-to step 3.
+If `vulkaninfo` above showed your card, the driver is installed. With an
+NVIDIA card, check that the export encoder is installed too
+(`libnvidia-encode1`, below), then go on to step 3. With AMD or Intel, see
+[AMD and Intel](#amd-and-intel).
+
+### NVIDIA
 
 On Debian, the driver is in the `non-free` section. Enable `contrib`,
 `non-free` and `non-free-firmware` in your apt sources (see the Debian wiki's
@@ -75,6 +82,33 @@ sudo ubuntu-drivers install
 
 Ubuntu's `nvidia-driver-<version>` packages already include Vulkan and the
 hardware encoder (NVENC). Restart the computer afterwards.
+
+### AMD and Intel
+
+AMD and Intel cards use the open-source Mesa drivers, which are part of the
+system. Make sure the Vulkan and video (VA-API) drivers are installed:
+
+```sh
+sudo apt install mesa-vulkan-drivers mesa-va-drivers vainfo vulkan-tools
+```
+
+- `mesa-vulkan-drivers` lets Vulkan programs use the card (RADV for AMD,
+  ANV for Intel). Without it, orbis-reframe can't show video.
+- `mesa-va-drivers` is AMD's hardware encoder for **File ▸ Export flat
+  video…** (VA-API). On Ubuntu 26.04 it's part of `mesa-libgallium`, which
+  apt picks for you.
+- On **Intel**, VA-API needs Intel's own driver instead:
+  `sudo apt install intel-media-va-driver`.
+
+To check that the card can encode, run `vainfo`: it should list
+`VAEntrypointEncSlice` lines for `VAProfileHEVCMain` or `VAProfileH264…`.
+If it doesn't, orbis-reframe tries Vulkan video encoding instead, which
+newer Mesa versions have on some cards.
+
+Vulkan video decoding is fairly new in Mesa, so the newer the system's Mesa,
+the better: Debian 13 has Mesa 25.0, Ubuntu 26.04 Mesa 26.0, and Debian
+Testing the newest. Without it orbis-reframe still runs, but decodes on the
+processor (see [If it doesn't start](#if-it-doesnt-start)).
 
 ## 3. Install orbis-reframe
 
@@ -122,7 +156,7 @@ sudo apt install ./orbis-reframe_<version>.ubuntu26.04_amd64.deb   # Ubuntu 26.0
 
 Keep the `./`: it tells apt to install the file instead of looking for a
 package by that name. apt also installs every library orbis-reframe needs.
-It doesn't install the NVIDIA driver (step 2), because a driver installed
+It doesn't install the graphics driver (step 2): an NVIDIA driver installed
 from NVIDIA's website would conflict with Debian's driver packages.
 
 To remove it again: `sudo apt remove orbis-reframe`.
@@ -292,9 +326,9 @@ Start orbis-reframe from a terminal so you can see its messages.
 |---|---|
 | `error while loading shared libraries: libXYZ.so…` | A library is missing (tarball only: the `.deb` installs them). Use the `ldd` check from step 3, option B, to find which ones. |
 | `Could not load the Qt platform plugin "wayland"` | Install `qt6-wayland`. If it's installed, you are probably in an X11 session: log out and choose a Wayland session on the login screen. |
-| *"Vulkan couldn't be started"* or *"Vulkan found no graphics card"* | Vulkan isn't working. Check that `vulkaninfo --summary` lists the NVIDIA card. If it doesn't, install `nvidia-vulkan-icd` (step 2) and restart. |
-| At startup: *"Your graphics card or driver can't decode video on the GPU"* | The card or driver has no Vulkan video decoding. orbis-reframe still works, but decodes on the processor, so 5.7K and 8K clips play slowly. Update the NVIDIA driver; cards older than the GTX 16 / RTX 20 series can't decode on the GPU. |
-| At startup or on export: *"Exporting needs NVIDIA's hardware video encoder (NVENC)"* | Install `libnvidia-encode1` (step 2). Without an NVIDIA card, exporting isn't possible yet. |
+| *"Vulkan couldn't be started"* or *"Vulkan found no graphics card"* | Vulkan isn't working. Check that `vulkaninfo --summary` lists your card. If it doesn't, install the card's Vulkan driver (step 2: `nvidia-vulkan-icd` for NVIDIA, `mesa-vulkan-drivers` for AMD and Intel) and restart. |
+| At startup: *"Your graphics card or driver can't decode video on the GPU"* | The card or driver has no Vulkan video decoding. orbis-reframe still works, but decodes on the processor, so 5.7K and 8K clips play slowly. On NVIDIA, update the driver; cards older than the GTX 16 / RTX 20 series can't decode on the GPU. On AMD and Intel, decoding needs a newer Mesa (step 2); `vulkaninfo \| grep video_decode` shows whether the driver has it. |
+| At startup or on export: *"Exporting needs a hardware video encoder (NVIDIA NVENC, Vulkan video or VAAPI)"* | On NVIDIA, install `libnvidia-encode1` (step 2). On AMD and Intel, install the VA-API driver (step 2, [AMD and Intel](#amd-and-intel)) and check with `vainfo` that it lists encoding (`VAEntrypointEncSlice`). |
 | **Track subject** or **Scan clip** is greyed out, with *"… model, which is missing"* under it | A file from the download is missing. Install or unpack orbis-reframe again. |
 | Choosing **Voice only** says *"The voice modes can't run on this computer"* | Install `libonnxruntime1.21` (Debian 13) or `libonnxruntime1.23` (Testing, Ubuntu 26.04), as the message says (step 3, option B). If the message mentions the model, unpack or install orbis-reframe again. |
 | The window stays black, or the clip never leaves *Buffering…* | Start with `ORBIS_VERBOSE=1 orbis-reframe` and look at the messages, and check **Help ▸ About** (below). |
@@ -304,8 +338,9 @@ If none of these help, please [report the
 problem](https://github.com/Schabo/orbis-reframe/issues) with the terminal
 output and the diagnostics from **Help ▸ About orbis-reframe**. Click **Copy
 diagnostics** and paste them into the report. They list the version, your
-Linux distribution, graphics card and driver, and whether video decoding,
-export and the AI features can run on your computer. If the window doesn't
+Linux distribution, graphics card and driver, whether video decoding and
+the AI features can run on your computer, and which video encoder export
+uses (with why the others can't be used). If the window doesn't
 open at all, include the output of `orbis-reframe --version`, your
-distribution, and your graphics card and driver version (from `nvidia-smi`)
+distribution, and your graphics card and driver (`vulkaninfo --summary`)
 instead.

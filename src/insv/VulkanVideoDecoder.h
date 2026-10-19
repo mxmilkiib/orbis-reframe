@@ -48,7 +48,8 @@ AVBufferRef* sharedVulkanDevice();
 // One decoded fisheye frame's Vulkan handles, pulled from its AVVkFrame under
 // the frame lock (see lockFrame). Consumed by render::VulkanFisheyeStitcher.
 struct VulkanLensFrame {
-    VkImage image = VK_NULL_HANDLE;   // 2-plane G8_B8R8_2PLANE_420_UNORM
+    VkImage image = VK_NULL_HANDLE;   // 2-plane: G8_B8R8_2PLANE_420_UNORM (NV12), or
+                                      // G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16 (P010) for 10-bit
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
     VkSemaphore semaphore = VK_NULL_HANDLE; // timeline

@@ -3,12 +3,14 @@
 #include <QString>
 
 // A project's own folder: everything that belongs to one project in one place,
-// so deleting the folder removes it all. Media is referenced, not copied.
+// so deleting the folder removes it all. Media is referenced, not copied;
+// colour LUTs are copied in (small, and easy to lose track of).
 //
 //   <name>/<name>.orp   the project file
 //   <name>/cache/       plate scans, waveforms, thumbnails (rebuilt if deleted)
 //   <name>/exports/     where exports are suggested
 //   <name>/screenshots/ where screenshots are suggested
+//   <name>/luts/        the clips' colour LUTs (.cube), made when one is picked
 //
 // A project file that isn't <name>/<name>.orp is a loose one (projects saved
 // before project folders existed): it still opens and saves where it is, and
@@ -35,6 +37,14 @@ bool isProjectFolder(const QString &projectFile);
 QString cacheDir(const QString &projectFile);
 QString exportsDir(const QString &projectFile);
 QString screenshotsDir(const QString &projectFile);
+QString lutsDir(const QString &projectFile);
+
+// `lutFile` copied into the luts/ folder of the project whose file is
+// `projectFile`, and the copy's path: the same name, or "<name> 2.cube", ...
+// when a different file has it (the same file again is reused). A loose or
+// untitled project has no folder: `lutFile` itself. Empty, with *error set,
+// when the copy fails.
+QString importLut(const QString &projectFile, const QString &lutFile, QString *error = nullptr);
 
 // Rename the project whose file is `projectFile` to `newName`: a project
 // folder's folder and file (<parent>/<newName>/<newName>.orp), a loose
@@ -44,7 +54,8 @@ QString rename(const QString &projectFile, const QString &newName, QString *erro
 
 // Copy the project whose file is `projectFile` as a new project `newName`
 // beside it: a project folder gets a new folder with the project file and
-// its cache/ (plate scans are slow to redo), not its exports or screenshots;
+// its cache/ (plate scans are slow to redo) and luts/, not its exports or
+// screenshots;
 // a loose project a new file next to it. Media is referenced, not copied
 // (Project::copyFile). Returns the new project file, empty with *error set.
 QString duplicate(const QString &projectFile, const QString &newName, QString *error = nullptr);

@@ -49,6 +49,7 @@ bool ProjectFiles::saveAs(const QString &untitledName)
     if (dlg.exec() != QDialog::Accepted)
         return false;
     copyPlateScans(*m_project, m_project->filePath(), dlg.projectFile());
+    copyLuts(*m_project, dlg.projectFile());
     QString error;
     if (!m_project->save(dlg.projectFile(), &error)) {
         QMessageBox::warning(m_window, tr("Could not save project"), error);
@@ -75,6 +76,27 @@ void ProjectFiles::copyPlateScans(const Project &project, const QString &fromFil
             QDir().mkpath(QFileInfo(to).absolutePath());
             QFile::copy(from, to);
         }
+    }
+}
+
+void ProjectFiles::copyLuts(Project &project, const QString &toFile)
+{
+    if (projectfolder::lutsDir(toFile).isEmpty())
+        return;
+    Timeline *timeline = project.timeline();
+    for (int i = 0; i < timeline->count(); ++i) {
+        const ClipItem &c = timeline->clipAt(i);
+        if (c.color.lut.isEmpty() || !QFileInfo::exists(c.color.lut))
+            continue;
+        QString error;
+        const QString copy = projectfolder::importLut(toFile, c.color.lut, &error);
+        if (copy.isEmpty()) {
+            std::fprintf(stderr, "[lut] %s\n", qPrintable(error));
+            continue;
+        }
+        ColorGrade g = c.color;
+        g.lut = copy;
+        timeline->setClipColor(c.id, g);
     }
 }
 

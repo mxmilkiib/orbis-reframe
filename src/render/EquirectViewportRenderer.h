@@ -11,6 +11,7 @@
 #include <vulkan/vulkan.h>
 
 #include "EquirectViewportWindow.h"
+#include "VulkanLut.h"
 #include "EmbeddedShaders.h"
 #include "FrameStats.h"
 
@@ -31,14 +32,15 @@ struct PushConstants {
     float _pad[3];       // std140: mat3 below aligns at offset 32
     float stab[12];      // 3 columns, each a vec3 padded to 16 bytes (col-major)
     float colorGrade[4]; // exposureEv, contrast%, saturation%, temperature%
+    float colorLut[4];   // render::VulkanLutStore::pushValues
 };
 
 // fisheye_view.frag's push constants: the same view block plus the lens gains.
 struct LensPushConstants {
     PushConstants view;
-    float gains[4]; // x, y: photometric gain of lens 0 / 1
+    float gains[4]; // x, y: photometric gain of lens 0 / 1; z: plane scale, w: chroma midpoint
 };
-static_assert(sizeof(LensPushConstants) == 112, "LensPushConstants must match fisheye_view.frag");
+static_assert(sizeof(LensPushConstants) == 128, "LensPushConstants must match fisheye_view.frag");
 
 // inset.frag's push constants.
 struct InsetPushConstants {
@@ -48,8 +50,9 @@ struct InsetPushConstants {
     float border;
     float borderColor[4]; // rgb, a = opacity
     float grade[4];       // ColorGrade::packed(), all 0 = none
+    float lut[4];         // render::VulkanLutStore::pushValues
 };
-static_assert(sizeof(InsetPushConstants) == 64, "InsetPushConstants must match inset.frag");
+static_assert(sizeof(InsetPushConstants) == 80, "InsetPushConstants must match inset.frag");
 
 // marker.frag's push constants (the Track subject box).
 struct MarkerPushConstants {
@@ -150,6 +153,9 @@ private:
     void retireLens(std::shared_ptr<const render::LensFrame> f);
 
     EquirectViewportWindow *m_window;
+
+    // The grade's LUTs: set 1 of the equirect, lens and inset pipelines.
+    render::VulkanLutStore m_luts;
 
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;

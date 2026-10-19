@@ -34,7 +34,7 @@ public:
 private:
     struct Clip {
         ReframeTrack reframe;
-        std::array<float, 4> grade{};
+        color::Grade grade;
     };
     struct Shared {
         std::mutex mx;

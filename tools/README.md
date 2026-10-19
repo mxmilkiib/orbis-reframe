@@ -16,14 +16,14 @@ each tool is for and when you'd reach for it. The examples use clips from
 | [`stitch_source_smoke`](#stitch_source_smoke) | check that the app's stitch, seek and decode work | GPU |
 | [`playback_bench`](#playback_bench) | time each step of playback and export | GPU |
 | [`view_compare`](#view_compare) | compare the direct view render with the equirect path | GPU |
-| [`reframe_export`](#reframe_export) | export a reframed flat video without the app | GPU, NVENC |
+| [`reframe_export`](#reframe_export) | export a reframed flat video without the app | GPU, hw encoder |
 | [`residual_stab`](#residual_stab) | measure the shake left after gyro stabilization | GPU, OpenCV |
 | [`track_subject`](#track_subject) | try subject tracking and make a follow-cam | GPU, OpenCV contrib |
 | [`plate_scan`](#plate_scan) | scan for number plates, check the blur by eye | GPU, OpenCV, ncnn |
 | [`audio_filter_bench`](#audio_filter_bench) | try and score the audio noise filters | FFmpeg |
 
-"GPU" means the app's own requirements: Vulkan with video decode (the
-NVIDIA path), plus FFmpeg. "OpenCV contrib" is `libopencv-contrib-dev`
+"GPU" means the app's own requirements: Vulkan with video decode, plus
+FFmpeg. "OpenCV contrib" is `libopencv-contrib-dev`
 (the `tracking` and `dnn` modules). ncnn comes from `scripts/fetch_ncnn.sh`.
 `docs/dev-environment.md` lists the packages. CMake skips a tool whose
 dependencies are missing and says so.
@@ -117,17 +117,27 @@ build/view_compare --at 5000 clip.insv
 ## reframe_export
 
 Exports a trimmed range of a clip as a flat H.264 / H.265 video through
-the app's export path: GPU stitch, reprojection, NVENC. The camera path
+the app's export path: GPU stitch, reprojection, hardware encode. The
+encoder is picked from NVENC, VAAPI and Vulkan video in that order (the
+first one a throwaway open succeeds with; Vulkan video is skipped on
+NVIDIA); `ORBIS_ENCODER=nvenc|vaapi|vulkan` pins one backend, any other
+value is reported and ignored. With `ORBIS_VERBOSE=1` it prints which
+encoder was picked and why the ones before it can't be used; the "no usable
+hardware encoder" error says the same. The camera path
 comes from a `--keys` file (one line per keyframe:
 `time_ms yaw pitch fovY [roll]`, in **radians**), or a fixed `--yaw/--pitch/--fov`.
-It also takes the colour grade and a picture-in-picture inset.
+It also takes the colour grade, a 3D LUT (`--lut FILE.cube`,
+`--lut-strength PCT`) and a picture-in-picture inset.
 
 **When:** testing export without the app, e.g. to script many renders or
-to replay keys from `track_subject`.
+to replay keys from `track_subject`. With `--lut`, to check the GPU's LUT
+against FFmpeg's own `lut3d` filter on an export without it (both GPU
+paths: set `INSV_FLAT_VIA_EQUIRECT=1` for the equirect + reproject one).
 
 ```sh
 build/reframe_export clip.insv out.mp4 --trim-in 10000 --trim-out 20000 --yaw 30 --fov 80
 build/reframe_export clip.insv out.mp4 --keys keys.txt --codec h264
+build/reframe_export clip.insv lut.mp4 --trim-in 1000 --trim-out 2000 --lut X5_I-Log_To_Rec.709_V1.0.cube
 ```
 
 ## residual_stab

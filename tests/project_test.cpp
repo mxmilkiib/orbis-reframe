@@ -1603,6 +1603,87 @@ void testTransitionJson()
     }
 }
 
+// A clip's LUT: copied into the project folder's luts/ (the same file
+// reused, a different one with the same name numbered), stored relative to
+// the project, a version-14 file only when a clip has one, and brought along
+// when the project is duplicated.
+void testLutJson()
+{
+    QTemporaryDir tmp;
+    CHECK(tmp.isValid());
+    const QString video = tmp.path() + "/clip.insv";
+    writeFile(video);
+    const QString downloads = tmp.path() + "/Downloads";
+    QDir().mkpath(downloads);
+    auto writeLut = [](const QString &path, const char *text) {
+        QFile f(path);
+        CHECK(f.open(QIODevice::WriteOnly));
+        f.write(text);
+    };
+    writeLut(downloads + "/X5 Log.cube", "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n"
+                                         "0 0 1\n1 0 1\n0 1 1\n1 1 1\n");
+    QString err;
+    const QString file = projectfolder::create(tmp.path(), "Ride", &err);
+    CHECK(!file.isEmpty());
+    CHECK(projectfolder::lutsDir(file) == tmp.path() + "/Ride/luts");
+
+    const QString copy = projectfolder::importLut(file, downloads + "/X5 Log.cube", &err);
+    CHECK(copy == tmp.path() + "/Ride/luts/X5 Log.cube" && QFileInfo::exists(copy));
+    CHECK(projectfolder::importLut(file, downloads + "/X5 Log.cube") == copy); // same file
+    CHECK(projectfolder::importLut(file, copy) == copy);                      // already there
+    QDir().mkpath(downloads + "/other");
+    writeLut(downloads + "/other/X5 Log.cube", "LUT_3D_SIZE 2\n");
+    CHECK(projectfolder::importLut(file, downloads + "/other/X5 Log.cube") ==
+          tmp.path() + "/Ride/luts/X5 Log 2.cube");
+    // A loose or untitled project keeps the file where it is.
+    CHECK(projectfolder::importLut(tmp.path() + "/loose.orp", downloads + "/X5 Log.cube") ==
+          downloads + "/X5 Log.cube");
+    CHECK(projectfolder::importLut(QString(), downloads + "/X5 Log.cube") ==
+          downloads + "/X5 Log.cube");
+
+    auto document = [](const QString &path) {
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(f.readAll()).object()
+                                           : QJsonObject();
+    };
+    auto firstColor = [&](const QString &path) {
+        return document(path)
+            .value("timeline").toObject().value("clips").toArray().at(0).toObject()
+            .value("color").toObject();
+    };
+    {
+        Project p;
+        const int id = p.timeline()->appendClip(video, 10000, 30.0, 7680, 3840, 0);
+        CHECK(p.save(file, &err));
+        CHECK(document(file).value("version").toInt() == Project::kPlainFormatVersion);
+        CHECK(!firstColor(file).contains("lut"));
+        ColorGrade g;
+        g.lut = copy;
+        g.lutStrength = 75.0f;
+        g.contrast = 10.0f;
+        p.timeline()->setClipColor(id, g);
+        CHECK(p.save(file, &err));
+        CHECK(document(file).value("version").toInt() == Project::kLutFormatVersion);
+        CHECK(firstColor(file).value("lut").toString() == "luts/X5 Log.cube");
+        CHECK(firstColor(file).value("lutStrength").toDouble() == 75.0);
+    }
+    {
+        Project p;
+        CHECK(p.load(file, &err));
+        const ColorGrade &g = p.timeline()->clipAt(0).color;
+        CHECK(g.lut == copy && g.lutStrength == 75.0f && g.contrast == 10.0f);
+    }
+    // Duplicated: the copy has its own luts/, and its clip points there.
+    const QString dup = projectfolder::duplicate(file, "Ride copy", &err);
+    CHECK(!dup.isEmpty());
+    CHECK(QFileInfo::exists(tmp.path() + "/Ride copy/luts/X5 Log.cube"));
+    {
+        Project p;
+        CHECK(p.load(dup, &err));
+        CHECK(p.timeline()->clipAt(0).color.lut == tmp.path() + "/Ride copy/luts/X5 Log.cube");
+    }
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv); // Project's timers want one (never run here)
@@ -1623,5 +1704,6 @@ int main(int argc, char **argv)
     testPlateScansInUse();
     testTitleJson();
     testTransitionJson();
+    testLutJson();
     return modeltest::finish("project_test");
 }

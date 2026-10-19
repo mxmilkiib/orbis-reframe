@@ -53,6 +53,7 @@ layout(push_constant) uniform PC {
     int stride;
     mat3 stab; // gyro de-rotation in the sphere frame, after the pose
     vec4 colorGrade; // exposureEv, contrast%, saturation%, temperature%
+    vec4 colorLut;   // the clip's LUT: mix, domain min / max (color_grade.glsl)
 } pc;
 
 #define FISHEYE_STITCH_NO_MAIN
@@ -97,7 +98,7 @@ float g0, g1; // photometric gains, per invocation
 
 vec3 shade(int px, int py)
 {
-    return gradeColor(blurredLenses(stitchDir(viewDir(px, py)), g0, g1), pc.colorGrade, 255.0);
+    return gradeColor(blurredLenses(stitchDir(viewDir(px, py)), g0, g1), pc.colorGrade, pc.colorLut, 255.0);
 }
 
 // BT.709 limited range, as reframe_reproject.comp.

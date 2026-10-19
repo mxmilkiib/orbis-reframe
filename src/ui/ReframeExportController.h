@@ -82,10 +82,9 @@ public:
         // the stick shake correction) and applied after the pose in the sphere
         // frame, like the viewport does. Null => no stabilization.
         std::shared_ptr<const insv::GyroStabilizer> stab;
-        // {exposureEv, contrast%, saturation%, temperature%} -- the Colour
-        // panel grade, static for the whole clip (no colour keyframing).
-        // All-zero (the default) => neutral.
-        float colorGrade[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        // The Colour panel grade (its LUT and four adjustments), static for
+        // the whole clip (no colour keyframing). Default => neutral.
+        color::Grade colorGrade;
         // The clip's stitch settings (ClipItem::lensGuard / depthSeam) --
         // same geometry as the preview.
         stitch::PreviewStitchConfig::LensGuard lensGuard = stitch::PreviewStitchConfig::LensGuard::Premium;

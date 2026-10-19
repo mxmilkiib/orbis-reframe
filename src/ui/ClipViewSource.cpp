@@ -62,7 +62,7 @@ bool ClipViewSource::read(exportpipe::VideoFrame &out)
     };
     stitch::Frame f;
     if (m_src->GpuViewAvailable()) {
-        f = m_src->ReadViewFrame(m_w, m_h, poseAt, job.colorGrade);
+        f = m_src->ReadViewFrame(m_w, m_h, poseAt, &job.colorGrade);
     } else {
         const stitch::Frame eq = m_src->ReadFrame();
         if (!eq.rgba.empty()) {
@@ -74,7 +74,7 @@ bool ClipViewSource::read(exportpipe::VideoFrame &out)
             view.roll = pose[2];
             view.fovY = pose[3];
             view.aspect = float(m_w) / m_h;
-            std::copy(job.colorGrade, job.colorGrade + 4, view.colorGrade);
+            view.colorGrade = job.colorGrade;
             f.rgba.resize(size_t(m_w) * m_h * 4);
             exportpipe::RenderRectilinear(eq.rgba.data(), eq.width, eq.height, f.rgba.data(), m_w,
                                           m_h, view);

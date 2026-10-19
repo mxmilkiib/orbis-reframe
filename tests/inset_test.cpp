@@ -287,7 +287,7 @@ void testFullFrameCopy(const std::string &dir)
 
     // Graded: what the screenshot's blend from RGBA gives, in NV12's luma.
     exportpipe::InsetClipJob g = job(dir + "/solid.mp4", double(kW) / kH, false);
-    g.colorGrade = {1.0f, 0.0f, 0.0f, 0.0f}; // +1 EV
+    g.colorGrade.adjust = {1.0f, 0.0f, 0.0f, 0.0f}; // +1 EV
     exportpipe::InsetCompositor graded({g}, W, H);
     CHECK(graded.composite(1000, y.data(), W, uv.data(), W, err));
     std::vector<uint8_t> rgb(size_t(W) * H * 3, 0);
@@ -322,7 +322,8 @@ void testFullFrameCopy(const std::string &dir)
 // The CPU export's colour grade (ReframeRenderer's gradeRgb(), the twin of
 // src/render/shaders/color_grade.glsl): a flat equirect reprojects to the same
 // flat colour, graded. Expected values worked out by hand from the formula.
-std::array<int, 3> gradedFlat(std::array<uint8_t, 3> rgb, std::array<float, 4> grade)
+std::array<int, 3> gradedFlat(std::array<uint8_t, 3> rgb, std::array<float, 4> grade,
+                              std::shared_ptr<const color::Lut3D> lut = nullptr, float mix = 1.0f)
 {
     constexpr int kEqW = 16, kEqH = 8, kOut = 4;
     std::vector<uint8_t> eq(size_t(kEqW) * kEqH * 4);
@@ -330,7 +331,9 @@ std::array<int, 3> gradedFlat(std::array<uint8_t, 3> rgb, std::array<float, 4> g
         eq[i] = rgb[0], eq[i + 1] = rgb[1], eq[i + 2] = rgb[2], eq[i + 3] = 255;
     std::vector<uint8_t> out(size_t(kOut) * kOut * 4);
     exportpipe::ReframeView view;
-    std::copy(grade.begin(), grade.end(), view.colorGrade);
+    view.colorGrade.adjust = grade;
+    view.colorGrade.lut = std::move(lut);
+    view.colorGrade.lutMix = mix;
     exportpipe::RenderRectilinear(eq.data(), kEqW, kEqH, out.data(), kOut, kOut, view);
     return {out[0], out[1], out[2]};
 }
@@ -344,6 +347,26 @@ void testColorGrade()
     // exposure -1, contrast -50, saturation +100, temperature -100
     CHECK((gradedFlat({60, 90, 120}, {-1, -50, 100, -100}) == RGB{55, 90, 125}));
     CHECK((gradedFlat({100, 150, 200}, {1, 30, -40, 60}) == RGB{255, 255, 255})); // clamps
+
+    // A LUT (2^3, inverting), mixed by its strength, and before the sliders.
+    std::string invert = "LUT_3D_SIZE 2\n";
+    for (int b = 0; b < 2; ++b)
+        for (int g = 0; g < 2; ++g)
+            for (int r = 0; r < 2; ++r)
+                invert += std::to_string(1 - r) + " " + std::to_string(1 - g) + " " +
+                          std::to_string(1 - b) + "\n";
+    const auto lut = color::parseCube(invert);
+    CHECK(lut != nullptr);
+    CHECK((gradedFlat({60, 90, 120}, {0, 0, 0, 0}, lut) == RGB{195, 165, 135}));
+    CHECK((gradedFlat({60, 90, 120}, {0, 0, 0, 0}, lut, 0.5f) == RGB{128, 128, 128}));
+    // Inverted, then grey: the luma of (195, 165, 135).
+    CHECK((gradedFlat({60, 90, 120}, {0, 0, -100, 0}, lut) == RGB{171, 171, 171}));
+    // GradeRgba (a flat clip's frame) applies it too.
+    uint8_t px[4] = {60, 90, 120, 255};
+    color::Grade g;
+    g.lut = lut;
+    exportpipe::GradeRgba(px, 1, g);
+    CHECK(px[0] == 195 && px[1] == 165 && px[2] == 135 && px[3] == 255);
 }
 
 } // namespace

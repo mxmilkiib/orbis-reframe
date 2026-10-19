@@ -30,7 +30,7 @@ or some of its media files are missing.
 | Start a new project | **New project…** (`Ctrl+N`). |
 | Open a project file that isn't listed | **Open other…** (`Ctrl+O`). |
 | Rename a project | Right-click its card ▸ **Rename…**, or select it and press `F2`. Both the project's folder and its project file get the new name. |
-| Copy a project | Right-click its card ▸ **Duplicate…** and give the copy a name (`<name> copy` is suggested). The copy gets its own folder beside the original, with the project file and its `cache/` (privacy-blur scans and waveforms), but not its exports or screenshots. The media files aren't copied: both projects use the same clips. |
+| Copy a project | Right-click its card ▸ **Duplicate…** and give the copy a name (`<name> copy` is suggested). The copy gets its own folder beside the original, with the project file, its `cache/` (privacy-blur scans and waveforms) and its `luts/`, but not its exports or screenshots. The media files aren't copied: both projects use the same clips. |
 | See a project's files | Right-click its card ▸ **Show in file manager**. |
 | Take a project off the list | Right-click its card ▸ **Remove from list**, or select it and press `Delete`. Its files are not deleted. |
 | Come back to the library | **File ▸ Project library…**. It closes the open project, asking first if there are unsaved changes. |
@@ -55,6 +55,7 @@ Summer trip/
   cache/            privacy-blur scans, audio waveforms, media thumbnails
   exports/          where exports are saved by default
   screenshots/      where screenshots are saved by default
+  luts/             the clips' colour LUTs, copied in when loaded (see Colour)
 ```
 
 Deleting the folder deletes the whole project, scans included. The video
@@ -64,7 +65,7 @@ and audio files you add stay where they are (see
 | To | Do |
 |---|---|
 | Save the project | **File ▸ Save project** (`Ctrl+S`). |
-| Save a copy in a new project folder | **File ▸ Save project as…** (`Ctrl+Shift+S`): give the copy a name and location. From then on, `Ctrl+S` saves to the copy. Its privacy-blur scans are copied along. |
+| Save a copy in a new project folder | **File ▸ Save project as…** (`Ctrl+Shift+S`): give the copy a name and location. From then on, `Ctrl+S` saves to the copy. Its privacy-blur scans and the clips' LUTs are copied along. |
 | Open a project file from anywhere | **File ▸ Open project…** (`Ctrl+O`), or give the `.orp` file on the command line: `orbis-reframe my-ride.orp`. |
 
 The window's title shows the project's file name, with a `*` while there
@@ -214,7 +215,7 @@ sound is AAC, stereo, at 48 kHz and 192 kbit/s.
 
 | Message | What to do |
 |---|---|
-| *Exporting needs NVIDIA's hardware video encoder (NVENC)* | Export uses the NVIDIA graphics card to encode. Install `libnvidia-encode1` ([Getting started](getting-started.md), step 2). Without an NVIDIA card, exporting isn't possible yet. |
+| *Exporting needs a hardware video encoder (NVIDIA NVENC, Vulkan video or VAAPI)* | Export uses the graphics card to encode. On NVIDIA, install `libnvidia-encode1` ([Getting started](getting-started.md), step 2). On AMD and Intel, install the VA-API driver ([Getting started](getting-started.md#amd-and-intel)) and check with `vainfo` that it lists encoding (`VAEntrypointEncSlice`). **Show Details…** says why each encoder couldn't be used; if you report the problem, include it. |
 | *The timeline can't be exported: these source files are missing.* | A clip's file isn't where the project expects it -- on the video track, an overlay or an audio track (the list says which). Put it back, find it with **Locate file…** in the **Media** tab (see [Where the clips are](#where-the-clips-are)), or remove its clips from the timeline, then export again. Clips on hidden or muted tracks, and muted audio clips, don't count: they aren't exported anyway. |
 | *"…" has the privacy blur on, but it hasn't been scanned for plates yet* (or *only part of it has been scanned*) | Scan that clip in the **Privacy** tab, or turn its blur off. See [Privacy blur](privacy.md). |
 | *The privacy blur may be out of date and needs checking or redoing.* | The stabilization was changed after the plates were found. **Continue anyway**, or check the blurs first. See [Privacy blur](privacy.md). |

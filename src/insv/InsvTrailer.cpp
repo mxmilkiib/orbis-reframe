@@ -166,7 +166,7 @@ void ParseMakerNotes(const std::vector<uint8_t>& payload, InsvMakerNotes& out) {
 }
 
 // The subset of record 0x101 (the `ExtraMetadata` protobuf, docs/formats/insta360-x5.md
-// §5) that timing and IMU scaling need.
+// §5) that timing and IMU scaling need, and the colour profile.
 struct ImuMetadata {
     uint64_t first_frame_timestamp = 0; // field 24
     double gyro_timestamp_ms = 0;       // field 28
@@ -174,6 +174,7 @@ struct ImuMetadata {
     int is_raw_gyro = -1;               // field 62 (-1 = absent)
     double acc_range_g = 16;            // field 65.1; telemetry-parser's defaults
     double gyro_range_dps = 2000;       // field 65.2
+    std::string gamma_mode;             // field 22
 };
 
 bool ReadVarint(const std::vector<uint8_t>& b, size_t& i, uint64_t& v) {
@@ -223,6 +224,7 @@ ImuMetadata ParseImuMetadata(const std::vector<uint8_t>& payload) {
         else if (f == 25 && wt == 1) m.rolling_shutter_ms = ReadDoubleLE(b.data());
         else if (f == 28 && wt == 1) m.gyro_timestamp_ms = ReadDoubleLE(b.data());
         else if (f == 62 && wt == 0) m.is_raw_gyro = v ? 1 : 0;
+        else if (f == 22 && wt == 2) m.gamma_mode.assign(b.begin(), b.end());
         else if (f == 65 && wt == 2) {
             WalkProtobuf(b, [&](uint32_t g, int gwt, uint64_t gv, const std::vector<uint8_t>&) {
                 if (gwt != 0 || gv == 0) return;
@@ -466,6 +468,7 @@ std::optional<InsvTelemetry> ReadInsvTelemetry(const std::string& file_path,
     out.first_frame_timestamp = meta.first_frame_timestamp;
     out.gyro_timestamp_ms = meta.gyro_timestamp_ms;
     out.rolling_shutter_ms = meta.rolling_shutter_ms;
+    out.gamma_mode = meta.gamma_mode;
     return out;
 }
 

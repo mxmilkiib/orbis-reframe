@@ -138,8 +138,9 @@ release test's GUI run (the dev test passes without them):
   `~ubuntu26.04` for Ubuntu); `scripts/package.sh` names the file
   `orbis-reframe_<version>.deb13_amd64.deb`, since GitHub turns `~` into `.`
   (`Depends` from `dpkg-shlibdeps` plus `qt6-wayland`, `qt6-svg-plugins` and
-  the ONNX Runtime built against, `libonnxruntime1.23` / `1.21`; Debian's NVIDIA
-  driver packages as `Suggests`, none on Ubuntu, whose names carry the driver version);
+  the ONNX Runtime built against, `libonnxruntime1.23` / `1.21`; `Suggests`: Mesa's
+  Vulkan and VA-API drivers for AMD / Intel, and Debian's NVIDIA driver packages
+  except on Ubuntu, whose names carry the driver version);
 - `orbis-reframe-<version>-source.tar.xz` (`git archive` of HEAD) and a
   `.sha256` for each file;
 - checks on the unpacked tarball: launcher, `--version`, `ldd`, bundled

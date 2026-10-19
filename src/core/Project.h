@@ -54,7 +54,8 @@ public:
     // A main-track clip: source, trimInMs, trimOutMs, sourceDurationMs, fps,
     //   sourceWidth, sourceHeight, reframe {keys: [{tMs, yaw, pitch, roll,
     //   fovY, ease}]} (ease: "easeOut" | "easeIn", the move to the next key;
-    //   absent => linear), color {exposureEv, contrast, saturation, temperature},
+    //   absent => linear), color {exposureEv, contrast, saturation, temperature;
+    //   optional: lut (a .cube file, stored like source), lutStrength},
     //   speed, stabilization {mode, windowYawSec, windowPitchSec,
     //   windowRollSec, horizonLockAmount, horizonGain, accelLowPassHz,
     //   pitchOffsetRad, rollOffsetRad, autoLevel (absent => true)},
@@ -102,8 +103,10 @@ public:
     // that differ between clips; a project with neither is still written as
     // version 10, so the builds before keep opening it. Version 12 added
     // titles; a project without one is written as before. Version 13 added
-    // transitions, the same way.
-    static constexpr int kFormatVersion = 13;
+    // transitions, the same way. Version 14 added a clip's LUT
+    // (color.lut), likewise.
+    static constexpr int kFormatVersion = 14;
+    static constexpr int kLutFormatVersion = 14;
     static constexpr int kTransitionFormatVersion = 13;
     static constexpr int kTitleFormatVersion = 12;
     static constexpr int kFlatClipFormatVersion = 11;

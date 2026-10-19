@@ -58,6 +58,12 @@ public:
     static void copyPlateScans(const Project &project, const QString &fromFile,
                                const QString &toFile);
 
+    // Copy the clips' LUTs into the luts/ folder of project `toFile` (a
+    // project folder's), pointing the clips at the copies: a project saved
+    // into a new folder takes its LUTs along. One that can't be copied stays
+    // where it is.
+    static void copyLuts(Project &project, const QString &toFile);
+
 private:
     // Saved: drop the scans in the project's cache no clip or undo step
     // names (PlateScanCache::prune).

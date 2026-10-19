@@ -47,8 +47,9 @@ void sampleEquirect(const uint8_t* eq, int w, int h, float u, float v, float out
 
 // Colour grade, applied in [0,255] rgb space -- the C++ twin of
 // src/render/shaders/color_grade.glsl's gradeColor() (which can't be included
-// here): change both together, constants included. Order: temperature,
-// exposure, contrast, saturation. Leaves alpha untouched.
+// here): change both together, constants included. Order: the LUT (mixed
+// with the input by lutMix), temperature, exposure, contrast, saturation.
+// Leaves alpha untouched.
 constexpr float kGradeTemperaturePush = 40.0f; // levels at temperature +-100%
 constexpr float kGradeContrastPivot = 128.0f;
 constexpr float kGradeWhite = 255.0f;
@@ -56,15 +57,26 @@ constexpr float kGradeWhite = 255.0f;
 // A grade's factors, worked out once per picture rather than per pixel.
 struct Grade {
     float t, ef, cf, sf;
-    explicit Grade(const float g[4])
-        : t(g[3] / 100.0f), ef(std::pow(2.0f, g[0])), cf(1.0f + g[1] / 100.0f),
-          sf(1.0f + g[2] / 100.0f)
+    const color::Lut3D* lut; // nullptr = none
+    float lutMix;
+    explicit Grade(const color::Grade& g)
+        : t(g.adjust[3] / 100.0f), ef(std::pow(2.0f, g.adjust[0])),
+          cf(1.0f + g.adjust[1] / 100.0f), sf(1.0f + g.adjust[2] / 100.0f),
+          lut(g.hasLut() ? g.lut.get() : nullptr), lutMix(std::min(g.lutMix, 1.0f))
     {
     }
 };
 
 inline void gradeRgb(float rgba[4], const Grade &g)
 {
+    if (g.lut) {
+        float in[3], out[3];
+        for (int c = 0; c < 3; ++c)
+            in[c] = std::clamp(rgba[c] / kGradeWhite, 0.0f, 1.0f);
+        g.lut->apply(in, out);
+        for (int c = 0; c < 3; ++c)
+            rgba[c] += (std::clamp(out[c], 0.0f, 1.0f) * kGradeWhite - rgba[c]) * g.lutMix;
+    }
     float r = rgba[0] + g.t * kGradeTemperaturePush;
     float gr = rgba[1];
     float b = rgba[2] - g.t * kGradeTemperaturePush;
@@ -186,9 +198,9 @@ void RenderRectilinear(const uint8_t* eqRgba, int eqW, int eqH, uint8_t* outRgba
         t.join();
 }
 
-void GradeRgba(uint8_t* rgba, size_t pixels, const float grade[4])
+void GradeRgba(uint8_t* rgba, size_t pixels, const color::Grade& grade)
 {
-    if (grade[0] == 0.0f && grade[1] == 0.0f && grade[2] == 0.0f && grade[3] == 0.0f)
+    if (grade.isNeutral())
         return;
     const Grade g(grade);
     auto run = [rgba, &g](size_t begin, size_t end) {

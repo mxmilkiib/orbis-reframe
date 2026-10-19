@@ -336,7 +336,7 @@ void testClipJob(const QString &dir)
     const ClipItem &c = t.clipAt(0);
     ReframeExportController::ClipJob job = renderjobs::clipJob(c, t, privacy);
     CHECK(job.clipPath == "/c/ride.insv" && job.trimInMs == 2000 && job.trimOutMs == 9000);
-    CHECK(job.speed == 2.0 && job.colorGrade[0] == 1.0f);
+    CHECK(job.speed == 2.0 && job.colorGrade.adjust[0] == 1.0f);
     CHECK(job.seamAdjustDeg[1] == 0.25); // measured under Premium (2), the clip's
     CHECK(job.lensGuard == stitch::PreviewStitchConfig::LensGuard::Premium && job.depthSeam);
     CHECK(!job.stab);    // stabilization off

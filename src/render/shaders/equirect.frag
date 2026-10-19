@@ -24,6 +24,7 @@ layout(push_constant) uniform PushConstants {
     // Colour panel: x=exposureEv (stops), y=contrast (%), z=saturation (%),
     // w=temperature (%). All 0 = neutral. Applied by color_grade.glsl.
     vec4 colorGrade;
+    vec4 colorLut;   // the clip's LUT: mix, domain min / max (color_grade.glsl)
 } pc;
 
 const float PI = 3.14159265358979323846;
@@ -65,5 +66,5 @@ void main() {
 
     vec2 uv = vec2(longitude / (2.0 * PI) + 0.5, 0.5 - latitude / PI);
     outColor = texture(equirectSampler, uv);
-    outColor.rgb = gradeColor(outColor.rgb, pc.colorGrade, 1.0);
+    outColor.rgb = gradeColor(outColor.rgb, pc.colorGrade, pc.colorLut, 1.0);
 }

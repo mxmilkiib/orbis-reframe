@@ -85,12 +85,15 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-wayland, qt6-svg-plugins")
 if(ORBIS_ORT_PACKAGE)
     string(APPEND CPACK_DEBIAN_PACKAGE_DEPENDS ", ${ORBIS_ORT_PACKAGE}")
 endif()
-# The NVIDIA driver only as a suggestion: a driver installed from NVIDIA's
-# .run installer has no Debian packages and would conflict with them. Not on
-# Ubuntu: its driver packages carry the driver version in their name
-# (nvidia-driver-595), which would go out of date.
+# The graphics drivers only as suggestions: a driver installed from NVIDIA's
+# .run installer has no Debian packages and would conflict with them. No
+# NVIDIA packages on Ubuntu: its driver packages carry the driver version in
+# their name (nvidia-driver-595), which would go out of date. Mesa's drivers
+# (AMD, Intel) are named the same everywhere; on Ubuntu 26.04
+# mesa-libgallium provides mesa-va-drivers.
+set(CPACK_DEBIAN_PACKAGE_SUGGESTS "mesa-vulkan-drivers, mesa-va-drivers | intel-media-va-driver")
 if(NOT ORBIS_PACKAGE_TARGET MATCHES "^ubuntu-")
-    set(CPACK_DEBIAN_PACKAGE_SUGGESTS "nvidia-driver, nvidia-vulkan-icd, libnvidia-encode1")
+    string(PREPEND CPACK_DEBIAN_PACKAGE_SUGGESTS "nvidia-driver, nvidia-vulkan-icd, libnvidia-encode1, ")
 endif()
 
 include(CPack)

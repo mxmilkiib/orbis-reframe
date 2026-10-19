@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ColorLut.h" // color::Grade
 #include "InsetGeometry.h"
 #include "PictureSource.h"
 
@@ -47,9 +48,9 @@ struct InsetClipJob {
     // The look at a source time (keyframes sampled; fades not applied).
     // Called on the export thread.
     std::function<inset::Look(int64_t sourceMs)> lookAt;
-    // A flat main-track clip's colour grade (ReframeView::colorGrade), all
-    // 0 = none.
-    std::array<float, 4> colorGrade{};
+    // A flat main-track clip's colour grade (ReframeView::colorGrade);
+    // default = none.
+    color::Grade colorGrade;
     // A title: this picture (premultiplied RGBA, stillW x stillH) for the
     // whole clip instead of a file's frames (`path` unused). Blended by its
     // alpha, like every picture.

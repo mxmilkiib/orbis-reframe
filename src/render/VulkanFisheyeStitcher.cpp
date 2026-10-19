@@ -422,7 +422,7 @@ bool VulkanFisheyeStitcher::stitchVk(const VulkanLensInput& f0, const VulkanLens
 bool VulkanFisheyeStitcher::stitchAndReframeVk(const VulkanLensInput& f0, const VulkanLensInput& f1,
                                                const insv::StitchGpuParams& params, int eqW, int eqH,
                                                int outW, int outH, const float pose[4],
-                                               const float stab[9], const float colorGrade[4],
+                                               const float stab[9], const color::Grade* colorGrade,
                                                std::vector<uint8_t>& outNv12, VulkanLensOutcome* r0,
                                                VulkanLensOutcome* r1, std::string& err)
 {
@@ -448,6 +448,10 @@ bool VulkanFisheyeStitcher::stitchAndReframeVk(const VulkanLensInput& f0, const 
         err = "vkCreateImageView (ycbcr) failed";
         return false;
     }
+
+    // The LUT is uploaded (its own submission) before this frame is recorded.
+    const color::Lut3D* lut = colorGrade && colorGrade->hasLut() ? colorGrade->lut.get() : nullptr;
+    const VkDescriptorSet lutSet = d->luts.setFor(lut ? colorGrade->lut : nullptr);
 
     ShaderParams sp{};
     packParams(params, eqW, eqH, sp);
@@ -537,10 +541,12 @@ bool VulkanFisheyeStitcher::stitchAndReframeVk(const VulkanLensInput& f0, const 
         for (int row = 0; row < 3; ++row)
             rp.stab[col * 4 + row] = stab ? stab[row * 3 + col] : (row == col ? 1.0f : 0.0f);
     for (int i = 0; i < 4; ++i)
-        rp.colorGrade[i] = colorGrade ? colorGrade[i] : 0.0f;
+        rp.colorGrade[i] = colorGrade ? colorGrade->adjust[i] : 0.0f;
+    VulkanLutStore::pushValues(lut, colorGrade ? colorGrade->lutMix : 0.0f, rp.colorLut);
 
     vkCmdBindPipeline(d->cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->rfPipeline);
-    vkCmdBindDescriptorSets(d->cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->rfPipeLayout, 0, 1, &d->rfSet,
+    const VkDescriptorSet rfSets[2] = {d->rfSet, lutSet};
+    vkCmdBindDescriptorSets(d->cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->rfPipeLayout, 0, 2, rfSets,
                             0, nullptr);
     vkCmdPushConstants(d->cmd, d->rfPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rp), &rp);
     const uint32_t gx = (static_cast<uint32_t>(outW / 4) + 15) / 16;
@@ -603,7 +609,7 @@ bool VulkanFisheyeStitcher::stitchAndReframeVk(const VulkanLensInput& f0, const 
 bool VulkanFisheyeStitcher::renderViewVk(const VulkanLensInput& f0, const VulkanLensInput& f1,
                                          const insv::StitchGpuParams& params, int measureW,
                                          int measureH, int outW, int outH, const float pose[4],
-                                         const float stab[9], const float colorGrade[4],
+                                         const float stab[9], const color::Grade* colorGrade,
                                          ViewFormat fmt, std::vector<uint8_t>& out,
                                          VulkanLensOutcome* r0, VulkanLensOutcome* r1,
                                          std::string& err)
@@ -622,7 +628,7 @@ bool VulkanFisheyeStitcher::renderViewVkToImage(const VulkanLensInput& f0,
                                                 const insv::StitchGpuParams& params,
                                                 int measureW, int measureH, int outW, int outH,
                                                 const float pose[4], const float stab[9],
-                                                const float colorGrade[4], FlatImageTarget& dst,
+                                                const color::Grade* colorGrade, FlatImageTarget& dst,
                                                 VulkanLensOutcome* r0, VulkanLensOutcome* r1,
                                                 std::string& err)
 {
@@ -665,7 +671,7 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
                                             const insv::StitchGpuParams& params, int measureW,
                                             int measureH, int canvasW, int canvasH,
                                             const std::vector<ViewRect>& views,
-                                            const float stab[9], const float colorGrade[4],
+                                            const float stab[9], const color::Grade* colorGrade,
                                             ViewFormat fmt, const uint32_t* clear,
                                             std::vector<uint8_t>& out, FlatImageTarget* img,
                                             VulkanLensOutcome* r0, VulkanLensOutcome* r1,
@@ -701,6 +707,10 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
         err = "vkCreateImageView (ycbcr) failed";
         return false;
     }
+
+    // The LUT is uploaded (its own submission) before this frame is recorded.
+    const color::Lut3D* lut = colorGrade && colorGrade->hasLut() ? colorGrade->lut.get() : nullptr;
+    const VkDescriptorSet lutSet = d->luts.setFor(lut ? colorGrade->lut : nullptr);
 
     // dims.zw = the measure grid: the equirect the stitch would have made, so
     // the photometric gains come out the same as on the equirect path.
@@ -772,8 +782,9 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
                          nullptr);
 
     vkCmdBindPipeline(d->cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->vwPipeline);
-    vkCmdBindDescriptorSets(d->cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->vwPipeLayout, 0, 1,
-                            &d->vwSet, 0, nullptr);
+    const VkDescriptorSet vwSets[2] = {d->vwSet, lutSet};
+    vkCmdBindDescriptorSets(d->cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->vwPipeLayout, 0, 2, vwSets,
+                            0, nullptr);
 
     ViewPush vp{};
     vp.outW = outW;
@@ -783,7 +794,8 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
         for (int row = 0; row < 3; ++row)
             vp.stab[col * 4 + row] = stab ? stab[row * 3 + col] : (row == col ? 1.0f : 0.0f);
     for (int i = 0; i < 4; ++i)
-        vp.colorGrade[i] = colorGrade ? colorGrade[i] : 0.0f;
+        vp.colorGrade[i] = colorGrade ? colorGrade->adjust[i] : 0.0f;
+    VulkanLutStore::pushValues(lut, colorGrade ? colorGrade->lutMix : 0.0f, vp.colorLut);
 
     // Pass 0: one invocation per measure-grid point (every 8th texel).
     vp.pass = 0;
@@ -1010,7 +1022,8 @@ bool VulkanFisheyeStitcher::measureSeamVk(const VulkanLensInput& f0, const Vulka
 
     if (viaView) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->vwPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->vwPipeLayout, 0, 1, &set, 0,
+        const VkDescriptorSet sets[2] = {set, d->luts.setFor(nullptr)}; // no grade here
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->vwPipeLayout, 0, 2, sets, 0,
                                 nullptr);
         ViewPush vp{};
         vp.pass = 2;
@@ -1191,8 +1204,9 @@ bool VulkanFisheyeStitcher::fillLensFrameVk(const VulkanLensInput& f0, const Vul
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
                          0, nullptr, 1, &zb, 0, nullptr);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->vwPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->vwPipeLayout, 0, 1, &d->vwSet,
-                            0, nullptr);
+    const VkDescriptorSet sets[2] = {d->vwSet, d->luts.setFor(nullptr)}; // no grade here
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, d->vwPipeLayout, 0, 2, sets, 0,
+                            nullptr);
     ViewPush vp{};
     vp.pass = 0;
     vkCmdPushConstants(cmd, d->vwPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(vp), &vp);

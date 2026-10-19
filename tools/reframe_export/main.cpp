@@ -74,6 +74,8 @@ struct Args {
     float contrast = 0.0f;
     float saturation = 0.0f;
     float temperature = 0.0f;
+    std::string lutPath;       // a .cube 3D LUT, applied before the four above
+    float lutStrength = 100.0f; // percent
     // One flat-video overlay, composited like the app's export does.
     std::string insetPath;
     int64_t insetStartMs = 0; // on the output timeline (0 = the in-point)
@@ -108,6 +110,8 @@ const char kUsage[] =
     "  --yaw DEG --pitch DEG --roll DEG --fov DEG   static pose when --keys is absent\n"
     "  --exposure EV --contrast PCT --saturation PCT --temperature PCT\n"
     "                        colour grade (all default 0 = neutral)\n"
+    "  --lut FILE.cube        a 3D LUT applied before the grade (e.g. a log-to-Rec.709 one)\n"
+    "  --lut-strength PCT     how much of the LUT (default 100)\n"
     "  --inset FILE[:START_MS]  a flat video overlaid from START_MS of the output\n"
     "  --inset-look CX,CY,W,OPACITY    its centre / width (fractions) and opacity\n"
     "  --inset-frame RADIUS,BORDER,RRGGBB  corner radius, border width (fractions)\n";
@@ -185,6 +189,10 @@ Args parseArgs(int argc, char** argv)
             a.saturation = static_cast<float>(std::atof(next("--saturation").c_str()));
         else if (k == "--temperature")
             a.temperature = static_cast<float>(std::atof(next("--temperature").c_str()));
+        else if (k == "--lut")
+            a.lutPath = next("--lut");
+        else if (k == "--lut-strength")
+            a.lutStrength = static_cast<float>(std::atof(next("--lut-strength").c_str()));
         else if (k == "--inset") {
             a.insetPath = next("--inset");
             const auto colon = a.insetPath.rfind(':');
@@ -300,7 +308,20 @@ int main(int argc, char** argv)
                  static_cast<float>(a.staticFovDeg * kDegToRad)};
     }
     const int poseCount = static_cast<int>(poses.size() / 4);
-    const float colorGrade[4] = {a.exposureEv, a.contrast, a.saturation, a.temperature};
+    color::Grade grade;
+    grade.adjust = {a.exposureEv, a.contrast, a.saturation, a.temperature};
+    if (!a.lutPath.empty()) {
+        std::string lutErr;
+        grade.lut = color::loadCube(a.lutPath, &lutErr);
+        if (!grade.lut) {
+            std::fprintf(stderr, "error: %s: %s\n", a.lutPath.c_str(), lutErr.c_str());
+            return 2;
+        }
+        grade.lutMix = std::clamp(a.lutStrength, 0.0f, 100.0f) / 100.0f;
+        std::printf("lut:    %s (%d^3, %.0f%%)\n", a.lutPath.c_str(), grade.lut->size,
+                    grade.lutMix * 100.0f);
+    }
+    const color::Grade* colorGrade = &grade;
     if (a.exposureEv != 0.0f || a.contrast != 0.0f || a.saturation != 0.0f ||
         a.temperature != 0.0f) {
         std::printf("colour: exposure=%.2fEV contrast=%.0f%% saturation=%.0f%% temperature=%.0f%%\n",

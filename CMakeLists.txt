@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 if(POLICY CMP0144)
     cmake_policy(SET CMP0144 NEW)
 endif()
-project(orbis-reframe VERSION 0.3.0 LANGUAGES CXX)
+project(orbis-reframe VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -184,6 +184,11 @@ if(ORBIS_SOURCE_TREE_FALLBACK)
         PRIVATE ORBIS_SOURCE_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources/models")
 endif()
 
+# --- color_lut: .cube 3D LUTs and color::Grade, what every layer that grades
+# shares (the model, the GPU stitch, the CPU export). Dependency-free.
+add_library(color_lut STATIC src/core/ColorLut.h src/core/ColorLut.cpp)
+target_include_directories(color_lut PUBLIC src/core)
+
 # --- orbis_core: the src/core edit model (ClipItem, Timeline, Project, ...).
 # Qt Core + JSON only -- no FFmpeg / Vulkan -- so the model tests build
 # without the FFmpeg block below. src/stitch and src/privacy are on the path
@@ -218,7 +223,7 @@ add_library(orbis_core STATIC
 )
 set_target_properties(orbis_core PROPERTIES AUTOMOC ON)
 target_include_directories(orbis_core PUBLIC src/core src/stitch src/privacy)
-target_link_libraries(orbis_core PUBLIC Qt6::Core nlohmann_json::nlohmann_json insv)
+target_link_libraries(orbis_core PUBLIC Qt6::Core nlohmann_json::nlohmann_json insv color_lut)
 
 # --- privacy_data: the privacy blur's plate-scan result + its cache file
 # (src/privacy/PlateScanData). Dependency-free, so the app can always apply a
@@ -243,9 +248,11 @@ add_library(render_gpu_stitch STATIC
     src/render/VulkanFisheyeStitcher.cpp
     src/render/VulkanFisheyeStitcherImpl.h
     src/render/VulkanFisheyeStitcherSetup.cpp
+    src/render/VulkanLut.h
+    src/render/VulkanLut.cpp
 )
 target_include_directories(render_gpu_stitch PUBLIC src/render)
-target_link_libraries(render_gpu_stitch PUBLIC insv Vulkan::Vulkan PRIVATE render_shaders)
+target_link_libraries(render_gpu_stitch PUBLIC insv color_lut Vulkan::Vulkan PRIVATE render_shaders)
 
 # --- insv_demux: the one FFmpeg-dependent piece of src/insv/ (decode a fisheye
 # frame from an .insv at time T). Separate lib so the projection/gyro core above
@@ -394,12 +401,13 @@ if(FFMPEG_FOUND)
     )
     # src/core for the Qt-free InsetGeometry.h (the shared inset placement).
     target_include_directories(reframe_flatten PUBLIC src/export src/core)
-    target_link_libraries(reframe_flatten PUBLIC PkgConfig::FFMPEG Threads::Threads)
+    target_link_libraries(reframe_flatten PUBLIC PkgConfig::FFMPEG Threads::Threads color_lut)
 
     # --- orbis_app: the whole app but main() -- the executable below, and
     # tests/main_window_test, which builds a MainWindow without a GPU.
     add_library(orbis_app STATIC
         src/ui/MainWindow.cpp
+        src/ui/MainWindowColour.cpp
         src/ui/MainWindowTransitions.cpp
         src/ui/MainWindow.h
         src/ui/ClipBackend.cpp
@@ -708,7 +716,7 @@ endif()
 # regardless of the block above. Run with `ctest` from the build dir (or
 # the binaries directly).
 foreach(model_test clip_item_test timeline_test timeline_tracks_test stabilization_test
-        project_test)
+        project_test color_lut_test)
     add_executable(${model_test} tests/${model_test}.cpp tests/support/ModelTest.h)
     target_include_directories(${model_test} PRIVATE tests)
     target_link_libraries(${model_test} PRIVATE orbis_core)

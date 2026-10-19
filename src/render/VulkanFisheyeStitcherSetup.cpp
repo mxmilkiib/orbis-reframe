@@ -103,6 +103,9 @@ void VulkanFisheyeStitcher::Impl::destroyResources()
 
 VkImageView VulkanFisheyeStitcher::Impl::nv12ViewFor(VkImage img, VkFormat fmt)
 {
+    // The ycbcr conversion is for one format; a view of another is invalid.
+    if (fmt != lensFormat)
+        return VK_NULL_HANDLE;
     auto it = nv12Views.find(img);
     if (it != nv12Views.end())
         return it->second;
@@ -117,7 +120,7 @@ VkImageView VulkanFisheyeStitcher::Impl::nv12ViewFor(VkImage img, VkFormat fmt)
     yci.pNext = &usage;
     yci.conversion = ycbcr;
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    vi.pNext = fmt == ycbcrFormat ? static_cast<const void*>(&yci)
+    vi.pNext = fmt == lensFormat ? static_cast<const void*>(&yci)
                                  : static_cast<const void*>(&usage);
     vi.image = img;
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -269,7 +272,8 @@ LensRingCore::Slot* VulkanFisheyeStitcher::Impl::acquireLensSlot(int lensW, int 
     const auto deadline = std::chrono::steady_clock::now() + kLensSlotWait;
     for (;;) {
         for (auto& sl : ring->slots)
-            if (!sl->busy && sl->pub.lensW == lensW && sl->pub.lensH == lensH) {
+            if (!sl->busy && sl->pub.lensW == lensW && sl->pub.lensH == lensH &&
+                sl->pub.bitDepth == (deepLens() ? 10 : 8)) {
                 sl->busy = true;
                 return sl.get();
             }
@@ -287,7 +291,8 @@ LensRingCore::Slot* VulkanFisheyeStitcher::Impl::acquireLensSlot(int lensW, int 
     // Drop free slots of another size first (a source's lens size doesn't
     // change, but be tidy).
     for (auto it = ring->slots.begin(); it != ring->slots.end();) {
-        if (!(*it)->busy && ((*it)->pub.lensW != lensW || (*it)->pub.lensH != lensH)) {
+        if (!(*it)->busy && ((*it)->pub.lensW != lensW || (*it)->pub.lensH != lensH ||
+                             (*it)->pub.bitDepth != (deepLens() ? 10 : 8))) {
             ring->destroySlot(**it);
             it = ring->slots.erase(it);
         } else {
@@ -297,11 +302,15 @@ LensRingCore::Slot* VulkanFisheyeStitcher::Impl::acquireLensSlot(int lensW, int 
     auto sl = std::make_unique<LensRingCore::Slot>();
     sl->pub.lensW = lensW;
     sl->pub.lensH = lensH;
+    sl->pub.bitDepth = deepLens() ? 10 : 8;
     sl->pub.id = LensRingCore::nextId.fetch_add(1);
     std::memcpy(sl->pub.deviceUuid, deviceUuid, sizeof deviceUuid);
     for (int i = 0; i < LensSlot::kImages; ++i) {
         const bool uv = (i & 1) != 0;
-        if (!makeExportImage(uv ? VK_FORMAT_R8G8_UNORM : VK_FORMAT_R8_UNORM,
+        // A plane copy needs the plane's size: 16-bit samples for P010.
+        const VkFormat fmt = deepLens() ? (uv ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R16_UNORM)
+                                        : (uv ? VK_FORMAT_R8G8_UNORM : VK_FORMAT_R8_UNORM);
+        if (!makeExportImage(fmt,
                              uv ? lensW / 2 : lensW, uv ? lensH / 2 : lensH, sl->img[i],
                              sl->mem[i], sl->pub.memSize[i], sl->pub.fd[i], err)) {
             ring->destroySlot(*sl);
@@ -428,6 +437,7 @@ VulkanFisheyeStitcher::~VulkanFisheyeStitcher()
         for (auto& [img, view] : d->nv12Views)
             vkDestroyImageView(d->device, view, nullptr);
         d->nv12Views.clear();
+        d->luts.destroy();
         if (d->pipeline) vkDestroyPipeline(d->device, d->pipeline, nullptr);
         if (d->pipeLayout) vkDestroyPipelineLayout(d->device, d->pipeLayout, nullptr);
         if (d->descPool) vkDestroyDescriptorPool(d->device, d->descPool, nullptr);
@@ -519,14 +529,34 @@ bool VulkanFisheyeStitcher::init(std::string& err)
     }
     vkGetDeviceQueue(d->device, d->queueFamily, 0, &d->queue);
 
-    return bringUp(false, VK_FORMAT_UNDEFINED, err);
+    return bringUp(false, err);
 }
 
 bool VulkanFisheyeStitcher::initAdopt(VkInstance inst, VkPhysicalDevice phys, VkDevice dev,
                                       uint32_t computeQueueFamily,
-                                      VkDeviceQueueCreateFlags queueFlags, VkFormat frameFormat,
-                                      std::string& err)
+                                      VkDeviceQueueCreateFlags queueFlags, std::string& err,
+                                      VkFormat lensFormat)
 {
+    if (lensFormat != VK_FORMAT_G8_B8R8_2PLANE_420_UNORM &&
+        lensFormat != VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16) {
+        err = "unsupported lens picture format " + std::to_string(int(lensFormat));
+        return false;
+    }
+    // The stitch samples the decoder's pictures through a ycbcr conversion,
+    // filtered, with midpoint chroma.
+    VkFormatProperties fp{};
+    vkGetPhysicalDeviceFormatProperties(phys, lensFormat, &fp);
+    const VkFormatFeatureFlags need =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT |
+        VK_FORMAT_FEATURE_MIDPOINT_CHROMA_SAMPLES_BIT;
+    if ((fp.optimalTilingFeatures & need) != need) {
+        err = lensFormat == VK_FORMAT_G8_B8R8_2PLANE_420_UNORM
+                  ? "the device can't sample 8-bit (NV12) pictures through a ycbcr conversion"
+                  : "the device can't sample 10-bit (P010) pictures through a ycbcr conversion";
+        return false;
+    }
+    d->lensFormat = lensFormat;
     d->adopted = true;
     d->instance = inst;
     d->phys = phys;
@@ -560,10 +590,10 @@ bool VulkanFisheyeStitcher::initAdopt(VkInstance inst, VkPhysicalDevice phys, Vk
         vkGetPhysicalDeviceProperties2(phys, &p2);
         std::memcpy(d->deviceUuid, idp.deviceUUID, sizeof d->deviceUuid);
     }
-    return bringUp(true, frameFormat, err);
+    return bringUp(true, err);
 }
 
-bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, VkFormat frameFormat, std::string& err)
+bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, std::string& err)
 {
     d->nv12 = nv12Mode;
 
@@ -610,9 +640,7 @@ bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, VkFormat frameFormat, std::st
     if (nv12Mode) {
         VkSamplerYcbcrConversionCreateInfo ycci{
             VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO};
-        ycci.format = frameFormat != VK_FORMAT_UNDEFINED
-                          ? frameFormat
-                          : VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+        ycci.format = d->lensFormat; // NV12, or P010 for 10-bit
         ycci.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709;
         ycci.ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_FULL; // camera HEVC is full range
         ycci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -625,7 +653,6 @@ bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, VkFormat frameFormat, std::st
             return false;
         }
         yci.conversion = d->ycbcr;
-        d->ycbcrFormat = ycci.format;
     }
 
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -671,7 +698,7 @@ bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, VkFormat frameFormat, std::st
     if (nv12Mode) {
         VkPhysicalDeviceImageFormatInfo2 fi{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2};
-        fi.format = d->ycbcrFormat;
+        fi.format = d->lensFormat;
         fi.type = VK_IMAGE_TYPE_2D;
         fi.tiling = VK_IMAGE_TILING_OPTIMAL;
         fi.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -739,6 +766,25 @@ bool VulkanFisheyeStitcher::bringUp(bool nv12Mode, VkFormat frameFormat, std::st
         return false;
     }
 
+    // The grade's LUTs, for the reproject and view passes below. The queue
+    // lock is set after initAdopt(), so look it up at each upload.
+    VulkanLutStore::Device lutDev;
+    lutDev.phys = d->phys;
+    lutDev.device = d->device;
+    lutDev.queue = d->queue;
+    lutDev.queueFamily = d->queueFamily;
+    lutDev.lockQueue = [impl = d] {
+        if (impl->lockQueue)
+            impl->lockQueue();
+    };
+    lutDev.unlockQueue = [impl = d] {
+        if (impl->unlockQueue)
+            impl->unlockQueue();
+    };
+    lutDev.waitIdle = [impl = d] { impl->idleBeforeFree(); };
+    if (!d->luts.init(lutDev, VK_SHADER_STAGE_COMPUTE_BIT, err))
+        return false;
+
     // The export reproject pass is optional -- a build without the SPV, or a
     // pipeline-creation failure, just leaves reframeReady() false and callers
     // fall back to the CPU reproject.
@@ -793,8 +839,9 @@ bool VulkanFisheyeStitcher::buildReframePipeline(std::string& err)
 
     VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ReframePush)};
     VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pli.setLayoutCount = 1;
-    pli.pSetLayouts = &d->rfSetLayout;
+    const VkDescriptorSetLayout sets[2] = {d->rfSetLayout, d->luts.layout()};
+    pli.setLayoutCount = 2;
+    pli.pSetLayouts = sets;
     pli.pushConstantRangeCount = 1;
     pli.pPushConstantRanges = &pcr;
     if (vkCreatePipelineLayout(d->device, &pli, nullptr, &d->rfPipeLayout) != VK_SUCCESS) {
@@ -843,8 +890,9 @@ bool VulkanFisheyeStitcher::buildViewPipeline(std::string& err)
 
     VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ViewPush)};
     VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pli.setLayoutCount = 1;
-    pli.pSetLayouts = &d->setLayout;
+    const VkDescriptorSetLayout sets[2] = {d->setLayout, d->luts.layout()};
+    pli.setLayoutCount = 2;
+    pli.pSetLayouts = sets;
     pli.pushConstantRangeCount = 1;
     pli.pPushConstantRanges = &pcr;
     if (vkCreatePipelineLayout(d->device, &pli, nullptr, &d->vwPipeLayout) != VK_SUCCESS) {

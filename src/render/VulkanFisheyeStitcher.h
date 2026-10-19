@@ -3,6 +3,7 @@
 #include <FisheyeProjection.h> // insv::StitchGpuParams
 #include <SeamDepth.h>         // insv::SeamCosts
 
+#include "ColorLut.h" // color::Grade
 #include "LensFrame.h"
 
 #include <vulkan/vulkan.h>
@@ -77,10 +78,14 @@ public:
     // `frameFormat` is the VkFormat the decoder's frames will carry (e.g.
     // VulkanVideoDecoder::frameFormat()); UNDEFINED means NV12. False (err
     // set) if the device can't do ycbcr conversion or the NV12 shader is
-    // missing -- caller should fall back to init()+stitch().
+    // missing -- caller should fall back to init()+stitch(). `lensFormat` is
+    // the decoder's picture format: NV12 (8-bit), or P010
+    // (VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16, 10-bit, e.g. the
+    // X6's I-Log); also false when the device can't sample it through a
+    // ycbcr conversion with linear filtering.
     bool initAdopt(VkInstance inst, VkPhysicalDevice phys, VkDevice dev,
                    uint32_t computeQueueFamily, VkDeviceQueueCreateFlags queueFlags,
-                   VkFormat frameFormat, std::string& err);
+                   std::string& err, VkFormat lensFormat = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM);
 
     bool ready() const { return m_ready; }
 
@@ -111,13 +116,12 @@ public:
     // Requires reframeReady(). Same semaphore handshake as stitchVk().
     // `stab` (row-major 3x3, nullptr => identity) is the frame's gyro
     // de-rotation in the sphere frame, applied after `pose`. `colorGrade`
-    // ({exposureEv, contrast%, saturation%, temperature%}, nullptr => neutral)
-    // is the Colour panel grade, applied to the equirect sample before it's
+    // (nullptr => neutral) is the Colour panel grade, its LUT included, applied to the equirect sample before it's
     // reprojected.
     bool stitchAndReframeVk(const VulkanLensInput& f0, const VulkanLensInput& f1,
                             const insv::StitchGpuParams& params, int eqW, int eqH, int outW, int outH,
                             const float pose[4], const float stab[9],
-                            const float colorGrade[4], std::vector<uint8_t>& outNv12,
+                            const color::Grade* colorGrade, std::vector<uint8_t>& outNv12,
                             VulkanLensOutcome* r0, VulkanLensOutcome* r1, std::string& err);
 
     // Depth-aware seam: measure the seam cost volume of a decoder-owned NV12
@@ -169,18 +173,19 @@ public:
     bool renderViewVk(const VulkanLensInput& f0, const VulkanLensInput& f1,
                       const insv::StitchGpuParams& params, int measureW, int measureH, int outW,
                       int outH, const float pose[4], const float stab[9],
-                      const float colorGrade[4], ViewFormat fmt, std::vector<uint8_t>& out,
+                      const color::Grade* colorGrade, ViewFormat fmt, std::vector<uint8_t>& out,
                       VulkanLensOutcome* r0, VulkanLensOutcome* r1, std::string& err);
 
     // As renderViewVk (one view), but the packed NV12/P010 goes into `dst`'s
     // image(s) on-device -- no host read-back. For feeding a *_vulkan
     // encoder's frame pool directly. `dst.fmt` picks the packing (the
-    // encoder frame pool's software format: NV12 or P010LE). Requires
-    // viewReady().
+    // encoder frame pool's software format: NV12 or P010LE). `colorGrade`
+    // (nullptr => neutral) is the Colour panel grade, its LUT included.
+    // Requires viewReady().
     bool renderViewVkToImage(const VulkanLensInput& f0, const VulkanLensInput& f1,
                              const insv::StitchGpuParams& params, int measureW,
                              int measureH, int outW, int outH, const float pose[4],
-                             const float stab[9], const float colorGrade[4],
+                             const float stab[9], const color::Grade* colorGrade,
                              FlatImageTarget& dst, VulkanLensOutcome* r0,
                              VulkanLensOutcome* r1, std::string& err);
 
@@ -235,7 +240,7 @@ public:
     const StitchTiming& lastTiming() const;
 
 private:
-    bool bringUp(bool nv12Mode, VkFormat frameFormat, std::string& err);
+    bool bringUp(bool nv12Mode, std::string& err);
     bool buildReframePipeline(std::string& err);
     bool buildViewPipeline(std::string& err);
     // renderViewVk / renderViewsVk: `views` into one buffer (canvas 0 x 0 =
@@ -243,7 +248,7 @@ private:
     bool renderViewsImpl(const VulkanLensInput& f0, const VulkanLensInput& f1,
                          const insv::StitchGpuParams& params, int measureW, int measureH,
                          int canvasW, int canvasH, const std::vector<ViewRect>& views,
-                         const float stab[9], const float colorGrade[4], ViewFormat fmt,
+                         const float stab[9], const color::Grade* colorGrade, ViewFormat fmt,
                          const uint32_t* clear, std::vector<uint8_t>& out,
                          FlatImageTarget* img, VulkanLensOutcome* r0,
                          VulkanLensOutcome* r1, std::string& err);

@@ -15,6 +15,9 @@ namespace syscheck {
 // or VAAPI wrapper; exportpipe::hwEncoderAvailable).
 bool hwEncoderAvailable();
 QString hwEncoderMissingText();
+// Why each encoder can't be used, one per line, for both codecs
+// (exportpipe::hwEncoderReport).
+QString hwEncoderReport();
 
 // Whether the viewport's GPU has Vulkan video decode for H.265 (the X5's
 // codec in every mode). Without it clips decode on the CPU: slow for 5.7K / 8K.
@@ -28,8 +31,10 @@ QString trackUnavailableReason();
 QString plateScanUnavailableReason();
 
 // Once the viewport has started Vulkan: warns about a missing GPU video
-// decode or NVENC in one dialog, with "Don't show this again" (per problem,
-// stored in ~/.config/orbis-reframe/orbis-reframe.conf).
+// decode or hardware encoder in one dialog, with "Don't show this again"
+// (per problem, stored in ~/.config/orbis-reframe/orbis-reframe.conf). The
+// dialog comes once the encoder probe has finished, which this doesn't
+// wait for.
 void warnAtStartup(QWidget *parent, EquirectViewportWindow *viewport);
 
 } // namespace syscheck

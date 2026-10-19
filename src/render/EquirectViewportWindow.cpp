@@ -132,7 +132,7 @@ bool EquirectViewportWindow::TakePendingFrame(int &width, int &height, std::vect
         SetPose(m_pendingView.pose[0], m_pendingView.pose[1], m_pendingView.pose[2],
                 m_pendingView.pose[3]);
     if (m_pendingView.hasGrade)
-        SetColorGrade(m_pendingView.grade);
+        SetColorGrade(&m_pendingView.grade);
     m_pendingView = {};
     if (m_pendingHasOverlay) { // ... and the pose / marker
         const FrameOverlay &o = m_pendingOverlay;
@@ -170,15 +170,10 @@ void EquirectViewportWindow::StabRowMajor(float out[9]) const
         out[i] = m_stab[i];
 }
 
-void EquirectViewportWindow::SetColorGrade(const float grade[4])
+void EquirectViewportWindow::SetColorGrade(const color::Grade *grade)
 {
-    if (grade) {
-        for (int i = 0; i < 4; ++i)
-            m_colorGrade[i] = grade[i];
-    } else {
-        for (float &v : m_colorGrade)
-            v = 0.0f;
-    }
+    QMutexLocker lock(&m_gradeMutex);
+    m_colorGrade = grade ? *grade : color::Grade{};
 }
 
 void EquirectViewportWindow::SetSurroundColor(const QColor &c)
@@ -200,10 +195,10 @@ void EquirectViewportWindow::SetMarkerColors(const QColor &select, const QColor 
     }
 }
 
-void EquirectViewportWindow::ColorGradeArr(float out[4]) const
+color::Grade EquirectViewportWindow::CurrentColorGrade() const
 {
-    for (int i = 0; i < 4; ++i)
-        out[i] = m_colorGrade[i];
+    QMutexLocker lock(&m_gradeMutex);
+    return m_colorGrade;
 }
 
 void EquirectViewportWindow::SetFrameInsets(std::vector<InsetDraw> insets)

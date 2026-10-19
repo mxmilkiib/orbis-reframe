@@ -130,6 +130,12 @@ QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QLineEdit:disabl
     color: @textDisabled;
     background-color: @window;
 }
+/* A field that needs the user's attention (Colour: a log clip without its
+   LUT). */
+QComboBox[attention="true"], QComboBox[attention="true"]:hover,
+QComboBox[attention="true"]:focus {
+    border: 2px solid @error;
+}
 QComboBox::drop-down {
     border: none;
     width: 18px;

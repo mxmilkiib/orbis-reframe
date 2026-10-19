@@ -17,8 +17,9 @@ virtual camera through the sphere over time to get a normal flat video out of a
 ## Status: "Works on my computer"
 
 > Status: work in progress, built and tested on one machine (Debian Testing,
-> NVIDIA RTX, Wayland, Sway). Other setups that meet the requirements should
-> work but haven't been tried.
+> NVIDIA RTX, Wayland, Sway). AMD and Intel GPUs are supported best-effort:
+> a contributor has run it on an AMD Radeon; Intel hasn't been tried. Other
+> setups that meet the requirements should work but haven't been tried.
 
 **Download:** a `.deb` and a tarball for Debian Testing, Debian 13 and
 Ubuntu 26.04 LTS on the
@@ -69,7 +70,7 @@ no closed-source dependencies.
 - Opens X5 `.insv` files directly, including every capture mode tested so far
   (8K, 5.7K/5.7K+, 5.7K 60, 4K 120).
 - Real-time playback: Vulkan video decode, then a Vulkan compute
-  fisheye→view pass on NVIDIA GPUs, with CPU fallbacks.
+  fisheye→view pass on the GPU, with CPU fallbacks.
 - Interactive 360° viewport: drag to look around during playback and while
   scrubbing.
 - The viewport renders straight from the fisheyes at full source detail.
@@ -78,6 +79,8 @@ no closed-source dependencies.
 - Keyframed virtual camera: yaw, pitch, roll and field of view, interpolated
   between keyframes. Set keyframes by dragging the viewport or by typing
   values into the sidebar.
+- Easing per keyframe (Linear, Fast to slow, Slow to fast), and moves that
+  start and stop gently instead of abruptly.
 - **Track subject**: draw a box around a rider, car or anything else in the
   view, and the camera follows it through the sphere. Tracking plays back live
   in the viewport, with the box green while the subject is found and red when
@@ -86,8 +89,11 @@ no closed-source dependencies.
   subject, so the camera shake and the 360° seam don't get in the way.
 
 **Timeline**
-- Multiple clips with trim in/out, split, reorder and hard cuts, from the
+- Multiple clips with trim in/out, split, duplicate and reorder, from the
   keyboard or the edit toolbar above the timeline.
+- Flat videos (from a phone or an action camera) on the video track too,
+  mixed with 360° clips, shown whole with bars or filling the frame.
+- Transitions at cuts: crossfade or dip to black.
 - Per-clip playback speed (0.1–4×) with pitch-preserving audio time-stretch.
 - Multiple tracks: any number of audio and video (overlay) tracks, which can
   be renamed, reordered, muted, zoomed and scrolled. Tracks keep to fixed
@@ -99,13 +105,15 @@ no closed-source dependencies.
 - Keyboard shortcuts for frame stepping, jumping between cuts, split and
   delete (Help ▸ Keyboard shortcuts, F1).
 
-**Picture-in-picture**
+**Picture-in-picture and titles**
 - Flat video files on overlay tracks, drawn as insets over the reframed view:
   position, size, opacity, rounded corners and a border, set in the Overlay
   tab or by dragging the inset in the viewport.
 - Keyframe an inset's position, size and opacity, and bring an overlay forward
   or send it back. An overlay's own sound comes along on its own track, linked
   like a video clip's.
+- Text titles on overlay tracks: font, colour, position and size, keyframed
+  and faded like an inset.
 
 **Stabilization** (native, from the camera's own IMU data)
 - Modes: **Off / Lean follow / Horizon lock / Custom** (per-axis strength),
@@ -116,7 +124,8 @@ no closed-source dependencies.
 **Stitching**
 - Stitch based on the MEI fisheye model, using the per-camera calibration
   stored in each file.
-- Lens-protector profiles and a per-clip seam fine-tune.
+- Lens-guard profiles and a seam fine-tune per clip, so clips filmed with and
+  without lens guards mix in one project.
 - Depth-aware seam: the stitch distance is measured along the seam every
   frame, so near objects (the bike, handlebars, hands) aren't doubled.
 
@@ -138,8 +147,9 @@ no closed-source dependencies.
   plate the scan missed; it's followed forwards and backwards from the box.
 
 **Output**
-- Flat reframed export of the whole timeline to H.264/H.265 via NVENC, with
-  the overlays composited in and the audio mixed.
+- Flat reframed export of the whole timeline to H.264/H.265 on the GPU's
+  hardware encoder (NVENC on NVIDIA, VA-API or Vulkan video on AMD and
+  Intel), with the overlays and titles composited in and the audio mixed.
 - Project settings: aspect ratio (16:9, 9:16, 1:1, 4:3), resolution and frame
   rate. The viewport is letterboxed to the chosen aspect.
 - Screenshot of the current view at project resolution (PNG), from the
@@ -155,15 +165,16 @@ no closed-source dependencies.
   a player bar under the video, and the timeline across the full window.
 - Three themes: Ember, Light and Neutral dark.
 
-Planned next: flat videos as the main video, transitions, titles and an
+Planned next: other 360° cameras (other Insta360 models, DJI, GoPro) and an
 effects library. Further out: a "tiny planet" projection and face blur.
 
 ## Building
 
-Linux only, Wayland only, NVIDIA GPU with Vulkan. Playback uses Vulkan video
-decode where the GPU has it and falls back to (slower) CPU decoding where it
-doesn't; export needs NVENC. The app tells you at startup what's missing
-instead of failing. Dependencies are the Debian Testing (or Debian 13, Ubuntu 26.04) packages for Qt 6,
+Linux only, Wayland only, a GPU with Vulkan: NVIDIA (tested), AMD or Intel
+on Mesa (best-effort). Playback uses Vulkan video decode where the GPU has it
+and falls back to (slower) CPU decoding where it doesn't; export needs a
+hardware encoder: NVENC on NVIDIA, VA-API or Vulkan video on AMD and Intel.
+The app tells you at startup what's missing instead of failing. Dependencies are the Debian Testing (or Debian 13, Ubuntu 26.04) packages for Qt 6,
 Vulkan, glslang, nlohmann-json and FFmpeg. Qt Multimedia (audio), OpenCV
 (analysis tools; with the contrib modules also subject tracking), ONNX Runtime
 (voice noise modes) and ncnn (the plate scan; `scripts/fetch_ncnn.sh`) are
@@ -247,7 +258,7 @@ to these projects and people:
   Gradient Information", ECCV 2024), run on the GPU by ncnn.
 
 Built with [Qt 6](https://www.qt.io/), [Vulkan](https://www.vulkan.org/),
-[FFmpeg](https://ffmpeg.org/) (demux, decode, NVENC encode, audio, time-stretch),
+[FFmpeg](https://ffmpeg.org/) (demux, decode, hardware encode, audio, time-stretch),
 [glslang](https://github.com/KhronosGroup/glslang) (shader compiler),
 [nlohmann/json](https://github.com/nlohmann/json), optionally
 [OpenCV](https://opencv.org/) (analysis tools, subject tracking) and

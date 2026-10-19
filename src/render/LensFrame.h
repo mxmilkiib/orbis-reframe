@@ -10,7 +10,8 @@
 //
 // The pair lives in a ring slot of four plain images on the decoder device --
 // lens 0 Y (R8_UNORM, lensW x lensH), lens 0 CbCr (R8G8_UNORM, half size),
-// lens 1 Y, lens 1 CbCr -- each in its own dedicated, exportable allocation
+// lens 1 Y, lens 1 CbCr; R16_UNORM / R16G16_UNORM for 10-bit pictures (P010:
+// the 10 bits at the top of each 16) -- each in its own dedicated, exportable allocation
 // (VK_KHR_external_memory_fd, opaque FD). The viewport imports each slot once
 // by FD and creates identical images over the memory. Plain Vulkan / POSIX,
 // no Qt, no FFmpeg: shared by render_gpu_stitch (exporter) and the viewport
@@ -26,6 +27,7 @@ struct LensSlot {
     uint64_t memSize[kImages] = {};     // allocation size of each image
     int lensW = 0;                      // Y extent; CbCr is (lensW/2, lensH/2)
     int lensH = 0;
+    int bitDepth = 8;                   // 8 (R8 / R8G8 planes) or 10 (R16 / R16G16)
     uint64_t id = 0;                    // process-unique, the importer's cache key
     uint8_t deviceUuid[16] = {};        // exporter's VkPhysicalDeviceIDProperties::deviceUUID;
                                         // an importer on another GPU can't use the FDs

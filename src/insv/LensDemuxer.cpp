@@ -122,6 +122,9 @@ bool LensDemuxer::open(const std::string& path, const DecoderSetup& setup, std::
             continue;
         InsvStreamInfo info;
         info.width = st->codecpar->width;
+        if (const AVPixFmtDescriptor* d =
+                av_pix_fmt_desc_get(static_cast<AVPixelFormat>(st->codecpar->format)))
+            info.bitDepth = d->comp[0].depth;
         info.height = st->codecpar->height;
         const AVRational fr = st->avg_frame_rate;
         if (fr.num <= 0 || fr.den <= 0) {

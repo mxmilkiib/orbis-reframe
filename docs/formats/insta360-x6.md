@@ -48,11 +48,22 @@ what our code assumes. Written as differences from the X5
   conversion built for the frame's real `VkFormat` - the Main 10
   `G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16` decodes at full precision
   (RADV only honors the conversion on the immutable sampler, so the
-  format is probed before `bringUp`). Exports of a 10-bit source request
-  HEVC Main 10: the fused view packs P010 straight into the encoder's
-  Vulkan frame pool (`hevc_vulkan`), with NV12 staging widened to
-  P010LE on CPU paths (`hevc_vaapi`) and an 8-bit retry when Main 10
-  can't open.
+  format is probed from the decoded frame before `bringUp`). Exports of
+  a 10-bit source request HEVC Main 10: the fused view packs P010
+  straight into the encoder's Vulkan frame pool (`hevc_vulkan`), with
+  NV12 staging widened to P010LE on CPU paths (`hevc_vaapi`) and an
+  8-bit retry when Main 10 can't open. The viewport's shared lens
+  planes are 16-bit (R16 / R16G16) for Main 10 sources.
+- 📖 Insta360's 10-bit I-Log LUTs (`X6_I-Log_LUTs.zip`, version 2.0, made
+  2026-05-20): 3D `.cube` files, each at 33³ and 65³, from I-Log to Rec.709
+  / BT.1886 (`X6_I-Log_to_Rec709_BT1886_s65_v2.cube`), to Rec.2020 PQ and to
+  Rec.2020 HLG (1000 nits, 203 nits diffuse white). The app reads all of
+  them (Colour ▸ LUT); the Rec.709 one is the one for its SDR output. The
+  10-bit pictures are graded in float before the 8-bit output, so they
+  shouldn't band. Note the analytic `gammaMode` decode above already
+  normalises I_Log and Dolby_Vision clips to BT.709, so the official
+  I-Log-to-Rec.709 LUT is meant for clips the decode hasn't touched -
+  applying it on top of a decoded clip double-corrects.
 - The X5 has I-Log too (X5 §3.3), so the same work covers it.
 
 ## Trailer
@@ -89,5 +100,6 @@ what our code assumes. Written as differences from the X5
 - Insta360 manual, I-Log mode (X5 and X6):
   <https://onlinemanual.insta360.com/x6/en-us/operating-tutorials/capture-preview/features/ilog>
 - Insta360 X6 specs page: <https://www.insta360.com/specs/x6>
+- Insta360 I-Log LUT downloads: <https://www.insta360.com/download/i-log>
 - Gyroflow telemetry-parser, `src/insta360/mod.rs`:
   <https://github.com/AdrianEddy/telemetry-parser>

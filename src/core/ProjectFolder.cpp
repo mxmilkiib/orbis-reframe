@@ -76,6 +76,47 @@ bool isProjectFolder(const QString &projectFile)
 QString cacheDir(const QString &projectFile) { return subDir(projectFile, "cache"); }
 QString exportsDir(const QString &projectFile) { return subDir(projectFile, "exports"); }
 QString screenshotsDir(const QString &projectFile) { return subDir(projectFile, "screenshots"); }
+QString lutsDir(const QString &projectFile) { return subDir(projectFile, "luts"); }
+
+QString importLut(const QString &projectFile, const QString &lutFile, QString *error)
+{
+    const QString dir = lutsDir(projectFile);
+    const QFileInfo src(lutFile);
+    if (dir.isEmpty())
+        return src.absoluteFilePath();
+    if (src.absolutePath() == QFileInfo(dir).absoluteFilePath())
+        return src.absoluteFilePath(); // already there
+    auto fail = [error](const QString &message) {
+        if (error)
+            *error = message;
+        return QString();
+    };
+    QFile in(lutFile);
+    if (!in.open(QIODevice::ReadOnly))
+        return fail(QObject::tr("Can't read %1.").arg(QDir::toNativeSeparators(lutFile)));
+    const QByteArray bytes = in.readAll();
+    if (!QDir().mkpath(dir))
+        return fail(QObject::tr("Can't create the folder %1.").arg(QDir::toNativeSeparators(dir)));
+    for (int n = 1;; ++n) {
+        const QString name = n == 1 ? src.fileName()
+                                    : QStringLiteral("%1 %2.%3")
+                                          .arg(src.completeBaseName())
+                                          .arg(n)
+                                          .arg(src.suffix());
+        const QString dest = dir + QLatin1Char('/') + name;
+        QFile out(dest);
+        if (out.exists()) {
+            if (out.open(QIODevice::ReadOnly) && out.readAll() == bytes)
+                return dest; // the same LUT, picked again
+            continue;
+        }
+        if (!out.open(QIODevice::WriteOnly) || out.write(bytes) != bytes.size() || !out.flush()) {
+            out.remove();
+            return fail(QObject::tr("Can't copy the LUT to %1.").arg(QDir::toNativeSeparators(dir)));
+        }
+        return dest;
+    }
+}
 
 namespace {
 
@@ -200,7 +241,8 @@ QString duplicate(const QString &projectFile, const QString &newName, QString *e
         return {};
     QString err;
     if (!Project::copyFile(fi.absoluteFilePath(), file, &err) ||
-        !copyTree(cacheDir(projectFile), cacheDir(file))) {
+        !copyTree(cacheDir(projectFile), cacheDir(file)) ||
+        !copyTree(lutsDir(projectFile), lutsDir(file))) {
         QDir(target.taken).removeRecursively();
         return failWith(error, err.isEmpty() ? QObject::tr("Can't copy the project's cache.") : err);
     }

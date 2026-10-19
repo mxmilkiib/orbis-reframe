@@ -9,6 +9,18 @@ void ColorGrade::clamp()
     contrast = std::clamp(contrast, kMinPercent, kMaxPercent);
     saturation = std::clamp(saturation, kMinPercent, kMaxPercent);
     temperature = std::clamp(temperature, kMinPercent, kMaxPercent);
+    lutStrength = std::clamp(lutStrength, 0.0f, kMaxPercent);
+}
+
+color::Grade ColorGrade::render(std::string *lutError) const
+{
+    color::Grade g;
+    g.adjust = packed();
+    if (!lut.isEmpty()) {
+        g.lut = color::cachedCube(lut.toStdString(), lutError);
+        g.lutMix = lutStrength / 100.0f;
+    }
+    return g;
 }
 
 qint64 ClipItem::frameDurationMs() const

@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "ColorLut.h" // color::Grade
+
 // CPU equirectangular -> rectilinear ("flat") reprojection for the export
 // pipeline. A direct port of the interactive viewport's fragment shader
 // (src/render/shaders/equirect.frag): for each output pixel, reconstruct the
@@ -25,10 +27,10 @@ struct ReframeView {
     // Gyro de-rotation (row-major 3x3) in the sphere frame, applied to the
     // world ray after the pose -- same as equirect.frag's pc.stab.
     float stab[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
-    // Colour panel: {exposureEv, contrast%, saturation%, temperature%}, all
-    // 0 = neutral. Same formula as the shaders' color_grade.glsl -- see
+    // Colour panel: the LUT and the four adjustments; default = neutral.
+    // Same formula as the shaders' color_grade.glsl -- see
     // ClipItem::ColorGrade.
-    float colorGrade[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    color::Grade colorGrade;
 };
 
 // Reproject an interleaved 8-bit RGBA equirect frame (eqW x eqH) into an
@@ -40,9 +42,9 @@ void RenderRectilinear(const uint8_t* eqRgba, int eqW, int eqH,
                        uint8_t* outRgba, int outW, int outH,
                        const ReframeView& view);
 
-// Apply a colour grade ({exposureEv, contrast%, saturation%, temperature%},
-// as ReframeView::colorGrade) to `pixels` interleaved 8-bit RGBA pixels in
-// place -- the same formula RenderRectilinear grades with. All 0 = no-op.
-void GradeRgba(uint8_t* rgba, size_t pixels, const float grade[4]);
+// Apply a colour grade (as ReframeView::colorGrade) to `pixels` interleaved
+// 8-bit RGBA pixels in place -- the same formula RenderRectilinear grades
+// with. A neutral grade is a no-op.
+void GradeRgba(uint8_t* rgba, size_t pixels, const color::Grade& grade);
 
 } // namespace exportpipe

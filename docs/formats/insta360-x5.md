@@ -168,14 +168,31 @@ Measured from `sample_footage/Modes/` (2026-09-27, one clip per mode):
 | `102900_00_003` | 5.7K 60 HDR | 2880×2880 | 59.94 | ~104 | 120 (2 s) |
 | `102925_00_004` | 4K 120 | 1920×1920 | 119.88 | ~94 | 120 (1 s) |
 | `104454_00_005` | 5.7K+ 30 HDR | 2880×2880 | 29.97 | ~63 | 60 (2 s) |
+| `185907_00_006` (`sample_footage/ilog/`, 2026-10-18) | 5.7K 30 I-Log | 2880×2880 | 29.97 | ~56 | 60 (2 s) |
 
 - **Every mode is 8-bit** HEVC Main, full-range BT.709 `yuvj420p`, no
   B-frames. HDR is tone-mapped in the camera; nothing in the stream says
   HDR, and the HDR / non-HDR 8K clips probe identically. 5.7K+ has the same stream shape as 5.7K; only the
   bitrate differs. No 10-bit path is
-  needed for these modes. **I-Log** exists on the X5 at 5.7K 60 and below
-  (Insta360's manual), but there's no I-Log clip in the sample set: its bit
-  depth and colour tagging are untested.
+  needed for these modes.
+- **I-Log** (5.7K 60 and below, Insta360's manual) ✅ on `185907_00_006`:
+  **8-bit** HEVC Main too, and tagged exactly like a standard clip
+  (full-range BT.709 `yuvj420p`, BT.709 transfer) -- the stream doesn't say
+  log; the trailer does: metadata field 22 `gamma_mode` is `I_Log` instead
+  of `standard` (§4; read by `ReadInsvTelemetry` as `gamma_mode`, shown
+  in Media information, and the Colour section asks for the LUT). The
+  rest of the trailer (calibration, IMU, exposure) has the same shape. The
+  picture is flat as log should be: on a 1280×720 forward view, luma
+  53–125 (average 97), mean saturation ~8.5 -- after the X5 LUT 28–99
+  (66), saturation ~19; the back view 73–214 -> 39–213. No visible
+  banding through the LUT at 8 bits (indoor, smooth ceiling).
+  📖 Insta360's I-Log download page offers the X5 a LUT of its own, as the
+  one for **8-bit** I-Log (the other, for newer cameras' 10-bit I-Log, is
+  the X6 set, X6 document). The LUT is
+  `X5_I-Log_To_Rec.709_V1.0.cube`: a 65³ 3D `.cube`, `TITLE "X5 ILog to
+  Rec709 3DLUT v1.0"`, no `DOMAIN` lines (so input 0–1), I-Log to Rec.709.
+  The app applies it per clip (Colour ▸ LUT); the curve itself isn't
+  modelled.
 - The trailer is identical in shape across modes: the same calibration
   strings (stated at the 10752×5376 reference size and scaled to the
   stream), the same lens profiles, ~1006 Hz IMU, and one exposure record per
@@ -302,7 +319,7 @@ Our `ParseMakerNotes()` reads the first four length-delimited fields
 | 18 | `trigger_source` | 2 = RemoteControl (4 = BtRemote on `192900`) | 📖 |
 | 19 | `dimension` | {3840, 3840} | per-lens stream size ✅ |
 | 20 | `frame_rate` | 30 | nominal |
-| 22 | `gamma_mode` | `standard` | colour profile (vs log etc.) 📖 |
+| 22 | `gamma_mode` | `standard`; `I_Log` in I-Log | colour profile ✅ (both values seen) |
 | **24** | **`first_frame_timestamp`** | 2468081984 | **device µs of the first recorded video frame**; the sync anchor (§7.1) ✅ 📖 |
 | **25** | **`rolling_shutter_time`** | **21.244** (11.837 on `201257`) | **frame readout time, ms**. Gyroflow's `frame_readout_time` reads it directly ✅ 📖 |
 | 26 | `file_group_info` | {type 20, index 0, identify "/DCIM/Camera01/…_019.insv", total 0} | split-recording group. `index` is non-zero on continuations (2 on `_020`), and `identify` is the first file's path. Type 20 is past the published enum (max 17). |
@@ -770,7 +787,8 @@ Still open:
 5. What sets field 25 per mode (resolution / frame rate / sensor mode).
    8K (HDR on/off), 5.7K+, 5.7K 60 and 4K 120 are now covered (§3.3); log,
    timelapse and `.insp` are still untested.
-6. X5 I-Log: bit depth, colour tagging and transfer curve (§3.3).
+6. X5 I-Log's transfer curve (§3.3; bit depth and tagging are known now).
+   Not needed while the maker's LUT does the conversion.
 
 ## 13. External sources
 
@@ -792,5 +810,7 @@ Still open:
   <https://invensense.tdk.com/products/motion-tracking/6-axis/icm-40609-d/>
 - Insta360 manual, I-Log mode (X5 and X6):
   <https://onlinemanual.insta360.com/x6/en-us/operating-tutorials/capture-preview/features/ilog>
+- Insta360 I-Log LUT downloads (X5 8-bit, 10-bit):
+  <https://www.insta360.com/download/i-log>
 - Gyroflow docs, Insta360 support (360 models unsupported in Gyroflow itself):
   <https://docs.gyroflow.xyz/app/getting-started/supported-cameras/insta360>

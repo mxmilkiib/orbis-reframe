@@ -38,6 +38,7 @@ full path, or what a value means.
 | **Codec** | How the video is compressed: **HEVC** (H.265) or **H.264**, with its profile. |
 | **Format** | Bits per colour (8 or 10) and how the colour is stored (4:2:0). |
 | **Colour** | The colour standard (BT.709) and whether the levels use the full or the limited range. |
+| **Colour profile** | The colour profile the camera filmed in: **Standard**, or a log profile such as **I-Log** (Insta360's). A log clip looks flat and grey until you give it the LUT the camera maker publishes for that profile (see [LUTs](colour.md#luts)). Shown when the camera writes it into the file. |
 | **Bitrate** | The video's data rate, for each of the two lens pictures. |
 
 ## Audio

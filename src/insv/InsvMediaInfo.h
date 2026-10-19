@@ -55,6 +55,14 @@ struct MediaInfo {
     double imuRateHz = 0.0; // 0 if the trailer has no IMU record
     int64_t exposureRecords = 0;
     double rollingShutterMs = 0.0;
+    // The colour profile it was filmed in (trailer field 22): "standard",
+    // "I_Log", ...; "" when the trailer doesn't say.
+    std::string colorProfile;
+    // The log profile it was filmed in, by its maker's name ("I-Log"), or ""
+    // when it wasn't filmed in log (or the file doesn't say). A log clip looks
+    // flat until the maker's LUT for that profile is applied. Other makers'
+    // profiles (D-Log M, GP-Log) go here once their files are read.
+    std::string logProfile() const { return colorProfile == "I_Log" ? "I-Log" : ""; }
     // GPS track (record 0x700): presence only, never positions -- the panel is
     // what people screenshot for bug reports.
     int64_t gpsRecords = 0; // 0 if the trailer has no GPS record

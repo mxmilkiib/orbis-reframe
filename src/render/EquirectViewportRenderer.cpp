@@ -104,8 +104,14 @@ void EquirectViewportRenderer::createDescriptorSet()
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = 1;
     layoutInfo.pBindings = &binding;
-    vkCreateDescriptorSetLayout(m_window->device(), &layoutInfo, nullptr,
+    VkResult r = vkCreateDescriptorSetLayout(m_window->device(), &layoutInfo, nullptr,
                                              &m_descriptorSetLayout);
+    if (r != VK_SUCCESS) {
+        std::fprintf(stderr, "[viewport] vkCreateDescriptorSetLayout failed (VkResult %d); the "
+                             "equirect preview and insets won't show\n", r);
+        m_descriptorSetLayout = VK_NULL_HANDLE;
+        return;
+    }
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -116,14 +122,25 @@ void EquirectViewportRenderer::createDescriptorSet()
     poolInfo.maxSets = 1;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
-    vkCreateDescriptorPool(m_window->device(), &poolInfo, nullptr, &m_descriptorPool);
+    r = vkCreateDescriptorPool(m_window->device(), &poolInfo, nullptr, &m_descriptorPool);
+    if (r != VK_SUCCESS) {
+        std::fprintf(stderr, "[viewport] vkCreateDescriptorPool failed (VkResult %d); the "
+                             "equirect preview won't show\n", r);
+        m_descriptorPool = VK_NULL_HANDLE;
+        return;
+    }
 
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_descriptorPool;
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &m_descriptorSetLayout;
-    vkAllocateDescriptorSets(m_window->device(), &allocInfo, &m_descriptorSet);
+    r = vkAllocateDescriptorSets(m_window->device(), &allocInfo, &m_descriptorSet);
+    if (r != VK_SUCCESS) {
+        std::fprintf(stderr, "[viewport] vkAllocateDescriptorSets failed (VkResult %d); the "
+                             "equirect preview won't show\n", r);
+        m_descriptorSet = VK_NULL_HANDLE;
+    }
 }
 
 VkPipeline EquirectViewportRenderer::makePipeline(render::shaders::Spirv frag, VkPipelineLayout layout,
@@ -220,6 +237,8 @@ VkPipeline EquirectViewportRenderer::makePipeline(render::shaders::Spirv frag, V
 
 void EquirectViewportRenderer::createPipeline()
 {
+    if (m_descriptorSetLayout == VK_NULL_HANDLE || !m_luts.ready())
+        return; // logged by createDescriptorSet / initResources; no equirect preview
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstantRange.offset = 0;
@@ -227,8 +246,9 @@ void EquirectViewportRenderer::createPipeline()
 
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &m_descriptorSetLayout;
+    const VkDescriptorSetLayout sets[2] = {m_descriptorSetLayout, m_luts.layout()};
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = sets;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstantRange;
     vkCreatePipelineLayout(m_window->device(), &layoutInfo, nullptr, &m_pipelineLayout);
@@ -246,6 +266,8 @@ void EquirectViewportRenderer::createLensResources()
     QVulkanInstance *inst = m_window->vulkanInstance();
     VkDevice device = m_window->device();
 
+    if (!m_luts.ready())
+        return; // logged by initResources
     // Needs Vulkan 1.1 (external memory / dedicated allocation structs) and
     // FD import, which MainWindow asks QVulkanWindow to enable.
     if (inst->apiVersion() < QVersionNumber(1, 1) ||
@@ -335,8 +357,9 @@ void EquirectViewportRenderer::createLensResources()
     VkPushConstantRange pcr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LensPushConstants)};
     VkPipelineLayoutCreateInfo pli{};
     pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pli.setLayoutCount = 1;
-    pli.pSetLayouts = &m_lensSetLayout;
+    const VkDescriptorSetLayout sets[2] = {m_lensSetLayout, m_luts.layout()};
+    pli.setLayoutCount = 2;
+    pli.pSetLayouts = sets;
     pli.pushConstantRangeCount = 1;
     pli.pPushConstantRanges = &pcr;
     if (vkCreatePipelineLayout(device, &pli, nullptr, &m_lensPipelineLayout) != VK_SUCCESS)
@@ -496,7 +519,8 @@ void EquirectViewportRenderer::ensureTextureResources(uint32_t width, uint32_t h
     write.descriptorCount = 1;
     write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     write.pImageInfo = &imageInfo;
-    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    if (m_descriptorSet != VK_NULL_HANDLE)
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 
     m_texWidth = width;
     m_texHeight = height;
@@ -556,44 +580,65 @@ void EquirectViewportRenderer::createInsetResources()
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.maxAnisotropy = 1.0f;
     si.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-    vkCreateSampler(device, &si, nullptr, &m_insetSampler);
+    if (vkCreateSampler(device, &si, nullptr, &m_insetSampler) != VK_SUCCESS)
+        m_insetSampler = VK_NULL_HANDLE;
 
     // One combined image sampler per slot -- the same set layout as the
-    // equirect texture's.
+    // equirect texture's. Without the sets there's no inset pipeline, and
+    // startNextFrame draws no insets.
     constexpr uint32_t n = EquirectViewportWindow::kMaxInsets;
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n};
-    VkDescriptorPoolCreateInfo dpi{};
-    dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    dpi.maxSets = n;
-    dpi.poolSizeCount = 1;
-    dpi.pPoolSizes = &ps;
-    vkCreateDescriptorPool(device, &dpi, nullptr, &m_insetPool);
-    VkDescriptorSetLayout layouts[n];
-    std::fill(layouts, layouts + n, m_descriptorSetLayout);
     VkDescriptorSet sets[n]{};
-    VkDescriptorSetAllocateInfo dsi{};
-    dsi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    dsi.descriptorPool = m_insetPool;
-    dsi.descriptorSetCount = n;
-    dsi.pSetLayouts = layouts;
-    vkAllocateDescriptorSets(device, &dsi, sets);
+    bool setsReady = false;
+    if (m_insetSampler != VK_NULL_HANDLE && m_descriptorSetLayout != VK_NULL_HANDLE) {
+        VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, n};
+        VkDescriptorPoolCreateInfo dpi{};
+        dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpi.maxSets = n;
+        dpi.poolSizeCount = 1;
+        dpi.pPoolSizes = &ps;
+        VkResult r = vkCreateDescriptorPool(device, &dpi, nullptr, &m_insetPool);
+        if (r == VK_SUCCESS) {
+            VkDescriptorSetLayout layouts[n];
+            std::fill(layouts, layouts + n, m_descriptorSetLayout);
+            VkDescriptorSetAllocateInfo dsi{};
+            dsi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            dsi.descriptorPool = m_insetPool;
+            dsi.descriptorSetCount = n;
+            dsi.pSetLayouts = layouts;
+            r = vkAllocateDescriptorSets(device, &dsi, sets);
+            if (r == VK_SUCCESS)
+                setsReady = true;
+            else
+                std::fill(sets, sets + n, VK_NULL_HANDLE);
+        } else {
+            m_insetPool = VK_NULL_HANDLE;
+        }
+        if (!setsReady)
+            std::fprintf(stderr, "[viewport] inset descriptor sets failed (VkResult %d); insets "
+                                 "won't show\n", r);
+    } else if (m_insetSampler == VK_NULL_HANDLE) {
+        std::fprintf(stderr, "[viewport] inset sampler failed; insets won't show\n");
+    }
     for (uint32_t i = 0; i < n; ++i) {
         m_insetSlots[i].set = sets[i];
         m_insetSlots[i].key = 0;
     }
 
-    VkPushConstantRange pcr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(InsetPushConstants)};
-    VkPipelineLayoutCreateInfo pli{};
-    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pli.setLayoutCount = 1;
-    pli.pSetLayouts = &m_descriptorSetLayout;
-    pli.pushConstantRangeCount = 1;
-    pli.pPushConstantRanges = &pcr;
-    vkCreatePipelineLayout(device, &pli, nullptr, &m_insetPipelineLayout);
-    m_insetPipeline = makePipeline(render::shaders::insetFrag(),
-                                   m_insetPipelineLayout, /*blend=*/true);
-    if (m_insetPipeline == VK_NULL_HANDLE)
-        std::fprintf(stderr, "[viewport] inset pipeline failed; insets won't show\n");
+    if (setsReady && m_luts.ready()) {
+        VkPushConstantRange pcr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(InsetPushConstants)};
+        VkPipelineLayoutCreateInfo pli{};
+        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        const VkDescriptorSetLayout sets[2] = {m_descriptorSetLayout, m_luts.layout()};
+        pli.setLayoutCount = 2;
+        pli.pSetLayouts = sets;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges = &pcr;
+        vkCreatePipelineLayout(device, &pli, nullptr, &m_insetPipelineLayout);
+        m_insetPipeline = makePipeline(render::shaders::insetFrag(),
+                                       m_insetPipelineLayout, /*blend=*/true);
+        if (m_insetPipeline == VK_NULL_HANDLE)
+            std::fprintf(stderr, "[viewport] inset pipeline failed; insets won't show\n");
+    }
 
     VkPushConstantRange mpcr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MarkerPushConstants)};
     VkPipelineLayoutCreateInfo mpli{};
@@ -758,6 +803,15 @@ void EquirectViewportRenderer::ensureInsetSlot(InsetSlot &slot, uint32_t w, uint
 
 void EquirectViewportRenderer::initResources()
 {
+    render::VulkanLutStore::Device lutDev;
+    lutDev.phys = m_window->physicalDevice();
+    lutDev.device = m_window->device();
+    lutDev.queue = m_window->graphicsQueue();
+    lutDev.queueFamily = m_window->graphicsQueueFamilyIndex();
+    lutDev.waitIdle = [device = lutDev.device] { vkDeviceWaitIdle(device); };
+    std::string lutErr;
+    if (!m_luts.init(lutDev, VK_SHADER_STAGE_FRAGMENT_BIT, lutErr))
+        std::fprintf(stderr, "[viewport] %s; the picture can't be drawn\n", lutErr.c_str());
     createSampler();
     createDescriptorSet();
     createPipeline();
@@ -787,6 +841,7 @@ void EquirectViewportRenderer::releaseResources()
     destroyInsetResources();
     destroyLensResources();
     destroyTextureResources();
+    m_luts.destroy();
 
     if (m_sampler != VK_NULL_HANDLE) {
         vkDestroySampler(device, m_sampler, nullptr);

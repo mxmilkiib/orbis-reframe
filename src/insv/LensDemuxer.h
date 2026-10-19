@@ -44,7 +44,7 @@ struct InsvStreamInfo {
     int height = 0;
     double fps = 0.0;
     int64_t durationMs = 0;
-    int bitDepth = 0; // bits per component (the X6 records HEVC Main 10)
+    int bitDepth = 8; // bits per sample: 8, or 10 for HEVC Main 10 (the X6's I-Log)
 };
 
 class LensDemuxer {

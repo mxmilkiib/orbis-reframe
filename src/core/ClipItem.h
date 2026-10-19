@@ -4,6 +4,7 @@
 #include "ReframeTrack.h"
 #include <BlurAddition.h>   // privacy::BlurAddition (header-only, no deps)
 #include <BlurRemoval.h>    // privacy::BlurRemoval (header-only, no deps)
+#include <ColorLut.h>       // color::Grade (no Qt)
 #include <GyroStabilizer.h> // insv::StabConfig (POD; no FFmpeg/Qt)
 #include <IStitchSource.h>  // stitch::PreviewStitchConfig::LensGuard (POD; no FFmpeg)
 
@@ -16,7 +17,7 @@
 
 // Per-clip colour grade (Colour panel): a static adjustment, not animated
 // like the reframe path -- there is no colour keyframing. Applied at render
-// time (order: temperature, exposure, contrast, saturation) by
+// time (order: the LUT, then temperature, exposure, contrast, saturation) by
 // src/render/shaders/color_grade.glsl, which every grading shader includes
 // (playback, GPU export), and by its C++ twin gradeRgb() in
 // src/export/ReframeRenderer.cpp (CPU export fallback) -- the two must be
@@ -31,18 +32,28 @@ struct ColorGrade {
     float contrast = 0.0f;    // percent, [kMinPercent, kMaxPercent], 0 = neutral
     float saturation = 0.0f;  // percent, [kMinPercent, kMaxPercent], -100 = grayscale
     float temperature = 0.0f; // percent, [kMinPercent, kMaxPercent], warm(+)/cool(-)
+    // A 3D LUT (.cube) applied before the four above, e.g. a camera maker's
+    // log-to-Rec.709 one: absolute path, empty = none. Copied into the
+    // project's luts/ folder when picked (ProjectFolder.h); the project file
+    // stores it relative to the project like media.
+    QString lut;
+    float lutStrength = 100.0f; // percent, [0, kMaxPercent]: mix of the LUT's output
 
     bool operator==(const ColorGrade &o) const
     {
         return exposureEv == o.exposureEv && contrast == o.contrast &&
-              saturation == o.saturation && temperature == o.temperature;
+              saturation == o.saturation && temperature == o.temperature && lut == o.lut &&
+              (lut.isEmpty() || lutStrength == o.lutStrength);
     }
     bool operator!=(const ColorGrade &o) const { return !(*this == o); }
 
-    // The 4-float form the renderers take (shader push constant
-    // pc.colorGrade, exportpipe::ReframeView::colorGrade):
-    // {exposureEv, contrast, saturation, temperature}.
+    // The four adjustments as the renderers take them (shader push constant
+    // pc.colorGrade): {exposureEv, contrast, saturation, temperature}.
     std::array<float, 4> packed() const { return {exposureEv, contrast, saturation, temperature}; }
+    // What the renderers apply: packed() plus the LUT, loaded (once per file,
+    // color::cachedCube). A LUT that is missing or can't be read is left out;
+    // *lutError then says why.
+    color::Grade render(std::string *lutError = nullptr) const;
 
     // Clamp every field into its valid range, in place.
     void clamp();

@@ -22,6 +22,7 @@ layout(push_constant) uniform PushConstants {
     float border;     // border width, px
     vec4 borderColor; // rgb; a = opacity
     vec4 grade;       // colour grade (color_grade.glsl), all 0 = none
+    vec4 lut;         // its LUT: mix (0 = none), domain min / max
 } pc;
 
 #include "color_grade.glsl"
@@ -42,6 +43,6 @@ void main() {
     alpha *= t.a + (1.0 - t.a) * border;
     if (alpha <= 0.0)
         discard;
-    vec3 c = gradeColor(t.a > 0.0 ? min(t.rgb / t.a, vec3(1.0)) : vec3(0.0), pc.grade, 1.0);
+    vec3 c = gradeColor(t.a > 0.0 ? min(t.rgb / t.a, vec3(1.0)) : vec3(0.0), pc.grade, pc.lut, 1.0);
     outColor = vec4(mix(c, pc.borderColor.rgb, border), alpha);
 }

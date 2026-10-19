@@ -105,7 +105,7 @@ QImage ReframeExportController::renderStill(const ClipJob &c, qint64 sourceMs,
                 std::copy(pose, pose + 4, p);
                 stabAt(ptsMs, stab);
             },
-            c.colorGrade);
+            &c.colorGrade);
         if (f.rgba.empty()) {
             error = src.GetLastError().empty() ? tr("No frame at the playhead.")
                                                : QString::fromStdString(src.GetLastError());
@@ -130,7 +130,7 @@ QImage ReframeExportController::renderStill(const ClipJob &c, qint64 sourceMs,
     view.fovY = pose[3];
     view.aspect = static_cast<float>(outW) / outH;
     stabAt(eq.timestamp_ms, view.stab);
-    std::copy(c.colorGrade, c.colorGrade + 4, view.colorGrade);
+    view.colorGrade = c.colorGrade;
 
     QImage img(outW, outH, QImage::Format_RGBA8888);
     exportpipe::RenderRectilinear(eq.rgba.data(), eq.width, eq.height, img.bits(), outW, outH,
@@ -371,7 +371,7 @@ void ReframeExportController::run(const Request &req)
                 AVFrame* vkFrame = writer->acquireVulkanFrame();
                 int64_t ptsMs = 0;
                 if (!vkFrame ||
-                    !src->ReadFlatFrameVk(req.outWidth, req.outHeight, poseAt, c.colorGrade,
+                    !src->ReadFlatFrameVk(req.outWidth, req.outHeight, poseAt, &c.colorGrade,
                                           vkFrame, ptsMs)) {
                     av_frame_free(&vkFrame);
                     const std::string &e = src->GetLastError();
@@ -405,7 +405,7 @@ void ReframeExportController::run(const Request &req)
                 av_frame_free(&vkFrame); // addVulkanFrame consumed the sends
                 written += reps;
             } else if (gpuFlat) {
-                stitch::FlatFrame ff = src->ReadFlatFrame(req.outWidth, req.outHeight, poseAt, c.colorGrade);
+                stitch::FlatFrame ff = src->ReadFlatFrame(req.outWidth, req.outHeight, poseAt, &c.colorGrade);
                 if (ff.nv12.empty()) { // clean end-of-clip, or error
                     const std::string &e = src->GetLastError();
                     if (!e.empty()) {
@@ -450,7 +450,7 @@ void ReframeExportController::run(const Request &req)
                     ++outFrames;
                     if (!writer->addEquirectFrame(eq.rgba.data(), eq.width, eq.height,
                                                   c.poseAt ? pose : nullptr,
-                                                  c.stab ? stab : nullptr, c.colorGrade, err) ||
+                                                  c.stab ? stab : nullptr, &c.colorGrade, err) ||
                         !feedAudio()) {
                         emit finished(false, QString::fromStdString(err), req.outPath);
                         return;

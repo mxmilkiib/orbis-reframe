@@ -12,7 +12,7 @@ For how the code works, see the other documents in [`docs/`](..).
 | [Stabilization](stabilization.md) | Steadying the picture with the camera's gyro: the modes, their settings, gyro sync, and what can't be fixed |
 | [Stitching](stitching.md) | Joining the two lenses: lens guards, depth-aware seam, seam alignment, filming tips |
 | [Audio and noise reduction](audio.md) | The camera's sound, two microphones, music and other audio files, levels and fades, noise and wind reduction, lining up a separate recorder |
-| [Colour](colour.md) | Exposure, contrast, saturation and temperature for each clip |
+| [Colour](colour.md) | Exposure, contrast, saturation and temperature for each clip, and LUTs (e.g. for I-Log footage) |
 | [Overlays](overlays.md) | Picture-in-picture videos: adding, placing, keyframing, frame and border |
 | [Titles](titles.md) | Text over the video: adding a title, its text, font, colour and size, placing and keyframing it |
 | [Transitions](transitions.md) | Going over from one clip to the next at a cut: a crossfade or a dip to black, its length, the footage it uses |

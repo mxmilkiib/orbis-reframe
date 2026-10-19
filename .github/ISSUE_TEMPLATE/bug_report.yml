@@ -25,7 +25,7 @@ body:
       description: |
         Help ▸ About orbis-reframe ▸ **Copy diagnostics**, and paste here.
         If the window doesn't open, paste the output of
-        `orbis-reframe --version` and `nvidia-smi` instead.
+        `orbis-reframe --version` and `vulkaninfo --summary` instead.
       render: text
     validations:
       required: true
