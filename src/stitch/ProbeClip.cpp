@@ -18,6 +18,7 @@ bool ProbeClip(const std::string& clip_path, ClipProbe& out, std::string& err)
     out.height = l0.height;
     out.fps = l0.fps;
     out.duration_ms = l0.durationMs;
+    out.bitDepth = l0.bitDepth;
     return true;
 }
 

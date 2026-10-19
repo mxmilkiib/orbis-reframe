@@ -136,17 +136,21 @@ public:
     // initAdopt(); fisheye_view_nv12.comp).
     bool viewReady() const { return m_viewReady; }
 
-    enum class ViewFormat { Nv12, Rgba };
+    // NV12 and P010 are both tightly packed BT.709 limited 4:2:0; P010 keeps
+    // 16 bits per sample with the 10-bit code in the high bits.
+    enum class ViewFormat { Nv12, Rgba, P010 };
 
-    // A caller-owned NV12 image the fused view fills on-device instead of
-    // reading back to the host: the fields of FFmpeg's AVVkFrame. `nbImages`
-    // is 1 for a multi-plane image (the usual NV12 case, the two planes
-    // addressed by aspect) or 2 for separate Y / CbCr images. `layout` and
-    // `access` are the image's current state; both are updated. `sem` /
-    // `semValue` are its timeline semaphore and value: the submission waits
-    // on `sem` at `semValue`, signals `semValue` + 1, and `semValue` is
-    // bumped. Same-device only -- the work runs on the adopted device.
+    // A caller-owned NV12/P010 image the fused view fills on-device instead of
+    // reading back to the host: the fields of FFmpeg's AVVkFrame. `fmt` is the
+    // pixel format the fused pass writes. `nbImages` is 1 for a multi-plane
+    // image (the usual case, the two planes addressed by aspect) or 2 for
+    // separate Y / CbCr images. `layout` and `access` are the image's current
+    // state; both are updated. `sem` / `semValue` are its timeline semaphore
+    // and value: the submission waits on `sem` at `semValue`, signals
+    // `semValue` + 1, and `semValue` is bumped. Same-device only -- the work
+    // runs on the adopted device.
     struct FlatImageTarget {
+        ViewFormat fmt = ViewFormat::Nv12;
         int nbImages = 0;
         VkImage img[2] = {};
         VkImageLayout layout[2] = {};
@@ -170,10 +174,12 @@ public:
                       const color::Grade* colorGrade, ViewFormat fmt, std::vector<uint8_t>& out,
                       VulkanLensOutcome* r0, VulkanLensOutcome* r1, std::string& err);
 
-    // As renderViewVk (fmt Nv12, one view), but the NV12 goes into `dst`'s
+    // As renderViewVk (one view), but the packed NV12/P010 goes into `dst`'s
     // image(s) on-device -- no host read-back. For feeding a *_vulkan
-    // encoder's frame pool directly. `colorGrade` (nullptr => neutral) is
-    // the Colour panel grade, its LUT included. Requires viewReady().
+    // encoder's frame pool directly. `dst.fmt` picks the packing (the
+    // encoder frame pool's software format: NV12 or P010LE). `colorGrade`
+    // (nullptr => neutral) is the Colour panel grade, its LUT included.
+    // Requires viewReady().
     bool renderViewVkToImage(const VulkanLensInput& f0, const VulkanLensInput& f1,
                              const insv::StitchGpuParams& params, int measureW,
                              int measureH, int outW, int outH, const float pose[4],

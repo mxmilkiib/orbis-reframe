@@ -45,6 +45,9 @@ struct FlattenConfig {
     int out_h = 1080;
     double fps = 30.0;
     bool h265 = true;
+    // HEVC only: ask the encoder for Main 10 (P010 input). Falls back to
+    // 8-bit if the picked encoder can't take it. Ignored for h264.
+    bool ten_bit = false;
     int64_t bitrate_kbps = 40000;
     // Optional AAC audio stream, fed through FlattenWriter::addAudio().
     // audio_sample_rate 0 => video-only output (no audio stream at all).
@@ -101,10 +104,15 @@ public:
     // addNv12Frame() instead.
     bool vulkanEncodeAvailable() const;
 
+    // True when FlattenConfig::ten_bit held and the encoder opened for HEVC
+    // Main 10 (P010 input); the fused view then fills Vulkan frames with
+    // 10-bit precision.
+    bool tenBit() const;
+
     // An empty AV_PIX_FMT_VULKAN frame out of the encoder's frames pool, for
-    // the caller's GPU pipeline to fill (the fused view copies its NV12 into
-    // the frame's images on-device and advances its semaphore / layout
-    // bookkeeping). The frame keeps the pool's reference; hand it to
+    // the caller's GPU pipeline to fill (the fused view copies its NV12 or
+    // P010, per the pool's sw_format, into the frame's images on-device and
+    // advances its semaphore / layout bookkeeping). The frame keeps the pool's reference; hand it to
     // addVulkanFrame() or release it with av_frame_free(). Requires
     // vulkanEncodeAvailable().
     AVFrame* acquireVulkanFrame();

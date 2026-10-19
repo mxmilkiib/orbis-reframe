@@ -643,7 +643,7 @@ bool VulkanFisheyeStitcher::renderViewVkToImage(const VulkanLensInput& f0,
     v.h = outH;
     std::vector<uint8_t> unused;
     return renderViewsImpl(f0, f1, params, measureW, measureH, 0, 0, {v}, stab, colorGrade,
-                           ViewFormat::Nv12, nullptr, unused, &dst, r0, r1, err);
+                           dst.fmt, nullptr, unused, &dst, r0, r1, err);
 }
 
 bool VulkanFisheyeStitcher::renderViewsVk(const VulkanLensInput& f0, const VulkanLensInput& f1,
@@ -694,9 +694,10 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
         err = "bad dimensions (outW must be a multiple of 4, outH a multiple of 2)";
         return false;
     }
-    const VkDeviceSize outBytes = fmt == ViewFormat::Rgba
-                                      ? static_cast<VkDeviceSize>(outW) * outH * 4
-                                      : static_cast<VkDeviceSize>(outW) * outH * 3 / 2;
+    const VkDeviceSize outBytes =
+        fmt == ViewFormat::Rgba  ? static_cast<VkDeviceSize>(outW) * outH * 4
+        : fmt == ViewFormat::P010 ? static_cast<VkDeviceSize>(outW) * outH * 3
+                                  : static_cast<VkDeviceSize>(outW) * outH * 3 / 2;
     if (!d->ensureUbo(err) || !d->ensureFlat(outBytes, err))
         return false;
 
@@ -788,7 +789,7 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
     ViewPush vp{};
     vp.outW = outW;
     vp.outH = outH;
-    vp.fmt = fmt == ViewFormat::Rgba ? 1 : 0;
+    vp.fmt = fmt == ViewFormat::Rgba ? 1 : fmt == ViewFormat::P010 ? 2 : 0;
     for (int col = 0; col < 3; ++col)
         for (int row = 0; row < 3; ++row)
             vp.stab[col * 4 + row] = stab ? stab[row * 3 + col] : (row == col ? 1.0f : 0.0f);
@@ -829,7 +830,7 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
     d->tsWrite(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 1);
 
     // Host read-back (flatBuf -> `out`), or the on-device copy into `img`'s
-    // images -- flatBuf is tightly packed NV12 either way.
+    // images -- flatBuf is tightly packed NV12 or P010 either way.
     if (img) {
         VkBufferMemoryBarrier toCopy{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
         toCopy.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -857,8 +858,10 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &toCopy,
                              img->nbImages, toDst);
 
-        // NV12 planes: Y at offset 0 (outW x outH), interleaved UV at
-        // outW*outH (outW/2 x outH/2 in texel pairs).
+        // 4:2:0 planes: Y at offset 0 (outW x outH samples), interleaved UV
+        // after it (outW/2 x outH/2 in texel pairs). P010 samples are 16-bit
+        // -- the copies' extents stay in texels, only the buffer offsets grow.
+        const bool p010 = img->fmt == ViewFormat::P010;
         VkBufferImageCopy y{0, 0, 0,
                             {multiplane ? VkImageAspectFlags(VK_IMAGE_ASPECT_PLANE_0_BIT)
                                         : VK_IMAGE_ASPECT_COLOR_BIT,
@@ -866,7 +869,7 @@ bool VulkanFisheyeStitcher::renderViewsImpl(const VulkanLensInput& f0, const Vul
                             {0, 0, 0},
                             {static_cast<uint32_t>(outW), static_cast<uint32_t>(outH), 1}};
         VkBufferImageCopy uv = y;
-        uv.bufferOffset = static_cast<VkDeviceSize>(outW) * outH;
+        uv.bufferOffset = static_cast<VkDeviceSize>(outW) * outH * (p010 ? 2 : 1);
         uv.imageSubresource.aspectMask =
             multiplane ? VkImageAspectFlags(VK_IMAGE_ASPECT_PLANE_1_BIT)
                        : VK_IMAGE_ASPECT_COLOR_BIT;

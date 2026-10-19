@@ -11,6 +11,7 @@
 #include <VulkanVideoDecoder.h>    // insv::VulkanVideoDecoder (stage 2, GPU decode)
 
 extern "C" {
+#include <libavutil/hwcontext.h>        // AVHWFramesContext::sw_format (ReadFlatFrameVk)
 #include <libavutil/hwcontext_vulkan.h> // AVVkFrame (ReadFlatFrameVk)
 }
 
@@ -483,6 +484,14 @@ AVBufferRef* NativeStitchSource::vulkanHwDevice() const {
     return vdec_ ? insv::sharedVulkanDevice() : nullptr;
 }
 
+int NativeStitchSource::SourceBitDepth() const {
+    if (vdec_)
+        return vdec_->lens(0).bitDepth;
+    if (demux_)
+        return demux_->lens(0).bitDepth;
+    return 0;
+}
+
 bool NativeStitchSource::ReadFlatFrameVk(int outW, int outH, const FramePoseFn& perFrame,
                                          const color::Grade* colorGrade, AVFrame* dst,
                                          int64_t& pts_ms) {
@@ -532,9 +541,15 @@ bool NativeStitchSource::readView(int outW, int outH, const FramePoseFn& perFram
     const insv::StitchGpuParams params = paramsWithSeam(pts_ms, in0, in1);
     bool ok;
     if (vkDst) {
-        // AVVkFrame: multi-plane NV12 is one image, per-plane is two.
+        // AVVkFrame: a multi-plane image is one VkImage, per-plane is two.
         auto* vkf = reinterpret_cast<AVVkFrame*>(vkDst->data[0]);
         render::VulkanFisheyeStitcher::FlatImageTarget tgt{};
+        // The frame pool's software format picks the packing: P010LE (Main 10
+        // encoders) gets 16-bit samples, everything else 8-bit NV12.
+        const auto* fc =
+            reinterpret_cast<const AVHWFramesContext*>(vkDst->hw_frames_ctx->data);
+        if (fc->sw_format == AV_PIX_FMT_P010LE)
+            tgt.fmt = render::VulkanFisheyeStitcher::ViewFormat::P010;
         tgt.nbImages = vkf->img[1] ? 2 : 1;
         for (int i = 0; i < tgt.nbImages; ++i) {
             tgt.img[i] = vkf->img[i];

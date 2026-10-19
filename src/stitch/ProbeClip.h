@@ -15,6 +15,7 @@ struct ClipProbe {
     int height = 0;
     double fps = 0.0;
     int64_t duration_ms = 0;
+    int bitDepth = 0; // bits per component (the X6 records HEVC Main 10)
 };
 
 bool ProbeClip(const std::string& clip_path, ClipProbe& out, std::string& err);
