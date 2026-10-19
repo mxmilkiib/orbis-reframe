@@ -6,6 +6,9 @@
 #include <memory>
 #include <string>
 
+struct AVBufferRef;
+struct AVFrame;
+
 // The reproject + encode half of the reframe export: take equirect frames
 // straight from stitch::NativeStitchSource in memory, CPU-reproject each against
 // the caller-baked pose (exportpipe::RenderRectilinear) -- or take frames the
@@ -48,6 +51,12 @@ struct FlattenConfig {
     int audio_sample_rate = 0;
     int audio_channels = 2;
     int64_t audio_bitrate_kbps = 192;
+    // The Vulkan hw device the caller's decode/stitch path runs on
+    // (stitch::NativeStitchSource::vulkanHwDevice(), borrowed). A *_vulkan
+    // encoder then shares it instead of opening a second device, so frames
+    // can stay GPU-resident end to end (acquireVulkanFrame + addVulkanFrame).
+    // nullptr = the encoder picks a device itself.
+    AVBufferRef* vulkan_device = nullptr;
 };
 
 // Feeds one or more clips' frames through a single open encoder + muxer, so a
@@ -83,6 +92,27 @@ public:
     // skips RenderRectilinear and the RGBA->NV12 swscale entirely. w x h must
     // equal the FlattenConfig out_w x out_h. False (with `err`) on failure.
     bool addNv12Frame(const uint8_t* nv12, int w, int h, std::string& err);
+
+    // True when the open encoder is a *_vulkan one on the device given as
+    // FlattenConfig::vulkan_device -- i.e. acquireVulkanFrame() produces
+    // frames on the device the caller's GPU pipeline already runs on, and
+    // addVulkanFrame() can take them with no host round-trip. False when the
+    // frame hook is set: it works on CPU NV12 planes, so callers must feed
+    // addNv12Frame() instead.
+    bool vulkanEncodeAvailable() const;
+
+    // An empty AV_PIX_FMT_VULKAN frame out of the encoder's frames pool, for
+    // the caller's GPU pipeline to fill (the fused view copies its NV12 into
+    // the frame's images on-device and advances its semaphore / layout
+    // bookkeeping). The frame keeps the pool's reference; hand it to
+    // addVulkanFrame() or release it with av_frame_free(). Requires
+    // vulkanEncodeAvailable().
+    AVFrame* acquireVulkanFrame();
+
+    // Encode a filled frame from acquireVulkanFrame(), advancing the shared
+    // output PTS; consumes the reference (av_frame_free'd after the send).
+    // Requires vulkanEncodeAvailable(). False (with `err`) on failure.
+    bool addVulkanFrame(AVFrame* frame, std::string& err);
 
     // Called on every output frame just before it is encoded, with its index
     // (0-based, across the whole file) and its NV12 planes (BT.709 limited
